@@ -7,19 +7,25 @@ import {
   parseJsonLd,
 } from '@/platforms/dom';
 import { ExtractionBuilder } from '@/platforms/builder';
-import { cleanText, uniqueJoin } from '@/utils/text';
+import { cleanText, flattenLines, uniqueJoin } from '@/utils/text';
 import { pathOf, searchParam } from '@/utils/url';
 import { extractEmbeddedJob } from './embedded';
+import { locationFromBlob, parseVisibleJobMeta, type VisibleJobMeta } from './jobMeta';
+import { waitForLinkedInJobReady } from './ready';
+import { extractSduiJob } from './sdui';
 
 const DETAIL_PANE_SELECTORS = [
+  '[data-sdui-screen*="SemanticJobDetails"]',
+  '[data-sdui-screen*="JobDetails"]',
   '.scaffold-layout__detail',
   '.jobs-search__job-details--container',
   '.jobs-search__job-details',
   '.job-view-layout',
   '.jobs-details__main-content',
-  '[componentkey^="JobDetails"]',
   '.jobs-semantic-search-job-details-wrapper',
   'section.two-pane-serp-page__detail-view',
+  '[componentkey="JobDetails"]',
+  '[componentkey^="JobDetails"]:not([componentkey*="About"])',
 ];
 
 const TITLE_SELECTORS = [
@@ -57,6 +63,7 @@ const LOCATION_SELECTORS = [
 ];
 
 const DESCRIPTION_SELECTORS = [
+  '[id^="JobDetails_AboutTheJob"]',
   '[componentkey^="JobDetails_AboutTheJob"]',
   '#job-details',
   '.jobs-description__content',
@@ -84,11 +91,17 @@ export function linkedinJobId(url: string): string {
   return slug?.[1] ?? '';
 }
 
-export function extractLinkedInJob(builder: ExtractionBuilder, ctx: { url: URL; document: Document }) {
+export async function extractLinkedInJob(
+  builder: ExtractionBuilder,
+  ctx: { url: URL; document: Document },
+  options?: { skipWait?: boolean },
+) {
   const { document: doc, url } = ctx;
   const jobId = linkedinJobId(url.toString());
+  if (!options?.skipWait) await waitForLinkedInJobReady(doc, jobId);
   expandCollapsed(doc);
 
+  const sdui = extractSduiJob(doc, jobId);
   const pane = detailPane(doc) ?? doc;
   const jsonLd = parseJsonLd(doc).find((item) => jsonLdType(item, 'JobPosting'));
   const org =
@@ -99,6 +112,7 @@ export function extractLinkedInJob(builder: ExtractionBuilder, ctx: { url: URL; 
   const card = selectedJobCard(doc, jobId);
 
   const rawTitle =
+    sdui.title ||
     firstText(pane, TITLE_SELECTORS) ||
     firstText(card ?? pane, [
       '.job-card-list__title',
@@ -113,39 +127,47 @@ export function extractLinkedInJob(builder: ExtractionBuilder, ctx: { url: URL; 
 
   const title = split.title || cardBits.title || rawTitle;
   const company =
-    firstText(pane, COMPANY_SELECTORS) ||
-    firstText(card ?? pane, [
-      '.job-card-container__primary-description',
-      '.artdeco-entity-lockup__subtitle',
-      '.job-card-container__company-name',
-    ]) ||
-    cardBits.company ||
-    embedded.company ||
-    asString(org?.name) ||
-    split.company;
+    cleanCompanyName(sdui.company) ||
+    cleanCompanyName(firstCompanyName(pane, COMPANY_SELECTORS)) ||
+    cleanCompanyName(
+      firstCompanyName(card ?? pane, [
+        '.job-card-container__primary-description',
+        '.artdeco-entity-lockup__subtitle',
+        '.job-card-container__company-name',
+      ]),
+    ) ||
+    cleanCompanyName(cardBits.company) ||
+    cleanCompanyName(embedded.company) ||
+    cleanCompanyName(asString(org?.name)) ||
+    cleanCompanyName(split.company);
 
-  const companyUrl =
+  const facts = headerFacts(pane);
+  const visible = mergeMeta(sdui.meta, parseVisibleJobMeta(doc, pane, title));
+  const rawCompanyUrl =
+    sdui.companyUrl ||
     firstHref(pane, COMPANY_SELECTORS, url.toString()) ||
-    firstHref(card ?? pane, ['a[href*="/company/"]'], url.toString()) ||
+    firstHref(card ?? pane, ['a[href*="/company/"]', 'a[href*="/school/"]'], url.toString()) ||
     companyHref(pane, company, url.toString()) ||
+    companyHref(doc, company, url.toString()) ||
     embedded.companyUrl ||
-    asString(org?.sameAs || org?.url);
+    asString(org?.sameAs || org?.url) ||
+    guessedCompanyUrl(company);
+  const companyUrl = normalizeCompanyUrl(rawCompanyUrl);
 
-  const location =
-    firstText(pane, LOCATION_SELECTORS) ||
-    firstText(card ?? pane, [
-      '.job-card-container__metadata-item',
-      '.artdeco-entity-lockup__caption',
-    ]) ||
-    cardBits.location ||
-    embedded.location ||
+  const location = firstRealLocation(
+    sdui.meta?.location,
+    visible.location,
+    facts.location,
+    firstText(pane, LOCATION_SELECTORS),
+    embedded.location,
     asString(
       (jsonLd?.jobLocation as Record<string, unknown> | undefined)?.address ?? jsonLd?.jobLocation,
-    ) ||
-    locationFromText(((pane as Element).textContent || '').slice(0, 500));
+    ),
+  );
 
   const description = cleanJobDescription(
-    firstText(pane, DESCRIPTION_SELECTORS) ||
+    sdui.description ||
+      firstText(pane, DESCRIPTION_SELECTORS) ||
       firstText(doc, DESCRIPTION_SELECTORS) ||
       embedded.description ||
       asString(jsonLd?.description),
@@ -172,20 +194,50 @@ export function extractLinkedInJob(builder: ExtractionBuilder, ctx: { url: URL; 
     .extra(
       'employmentType',
       'Employment type',
-      embedded.employmentType || asString(jsonLd?.employmentType),
+      visible.employmentType || embedded.employmentType || asString(jsonLd?.employmentType),
     )
-    .extra('datePosted', 'Posting date', embedded.datePosted || asString(jsonLd?.datePosted))
+    .extra(
+      'datePosted',
+      'Posting date',
+      visible.posted || facts.posted || embedded.datePosted || asString(jsonLd?.datePosted),
+    )
     .extra(
       'workplaceType',
       'Workplace type',
-      workplaceFromText(`${location} ${insights} ${embedded.workplace ?? ''}`) || embedded.workplace,
+      visible.workplace ||
+        facts.workplace ||
+        workplaceFromText(`${location} ${insights} ${embedded.workplace ?? ''}`) ||
+        embedded.workplace,
     )
-    .extra('jobInsights', 'Job insights', insights);
+    .extra(
+      'jobInsights',
+      'Job insights',
+      uniqueJoin([
+        insights,
+        visible.applicants,
+        visible.applicantTotal ? `${visible.applicantTotal} total applicants` : '',
+        visible.applicantsPastDay ? `${visible.applicantsPastDay} applied in the past day` : '',
+        visible.offLinkedIn,
+      ]),
+    )
+    .extra('companyIndustry', 'Industry', visible.companyIndustry)
+    .extra('companySize', 'Company size', visible.companySize)
+    .extra('companyWebsite', 'Company website', visible.companyWebsite)
+    .extra('companyFollowers', 'Company followers', visible.companyFollowers)
+    .extra('linkedInHeadcount', 'Employees on LinkedIn', visible.linkedInHeadcount)
+    .extra('candidateSeniority', 'Candidate seniority', visible.seniorityMix)
+    .extra('candidateEducation', 'Candidate education', visible.educationMix)
+    .extra('hiringTrend', 'Hiring trend', visible.hiringTrend)
+    .extra('employeeTenure', 'Median employee tenure', visible.employeeTenure);
 
   extractCriteria(builder, pane);
   if (!title) {
     builder.warn(
       'LinkedIn did not expose the job title in the page. Click the job in the right-hand panel, wait for it to finish loading, then click Re-extract.',
+    );
+  } else if (!location && !visible.employmentType && !visible.workplace) {
+    builder.warn(
+      'Job header details were not visible. Scroll the right-hand job panel so location, Remote/On-site, and About the company are on screen, then Re-extract.',
     );
   }
   return builder;
@@ -203,7 +255,13 @@ function selectedJobCard(doc: Document, jobId: string): Element | null {
     `li[data-occludable-job-id="${jobId}"]`,
     `a[href*="/jobs/view/${jobId}"]`,
   ]);
-  if (exact) return exact.closest('li, [role="button"], article, div.job-card-container') ?? exact;
+  if (exact) {
+    return (
+      exact.closest(
+        'li[data-occludable-job-id], li.jobs-search-results__list-item, div.job-card-container, article',
+      ) ?? exact
+    );
+  }
 
   const selected = doc.querySelector(
     '[aria-current="page"], [aria-selected="true"], [class*="job-card-container--selected"]',
@@ -267,7 +325,7 @@ function readCardLines(card: Element | null): { title: string; company: string; 
   return {
     title: unique[0] ?? '',
     company: unique[1] ?? '',
-    location: unique.find((line) => locationFromText(line)) ?? unique[2] ?? '',
+    location: unique.find((line) => locationFromBlob(line)) ?? '',
   };
 }
 
@@ -279,24 +337,117 @@ function companyHref(root: ParentNode, company: string, base: string): string {
   return match ? match.href : firstHref(root, ['a[href*="/company/"]'], base);
 }
 
+function headerFacts(pane: ParentNode) {
+  const header = visibleText(pane, 25);
+  const combo = header.match(
+    /([^\n·•|]{2,60}?)\s*[·•|]\s*((?:just now|today|\d+\s+(?:minute|hour|day|week|month|year)s?\s+ago))/i,
+  );
+  const parts = header.split(/\s*[·•|]\s*/).map((part) => cleanText(part)).filter(Boolean);
+  return {
+    location: locationFromBlob(combo?.[1] || ''),
+    posted: (combo?.[2] || header.match(/\b(?:just now|today|\d+\s+(?:minute|hour|day|week|month|year)s?\s+ago)\b/i)?.[0] || '')
+      .replace(/^(?:re)?posted\s+/i, ''),
+    workplace: parts.map(workplaceFromText).find(Boolean) || workplaceFromText(header),
+  };
+}
+
+function visibleText(root: ParentNode | null, maxLines: number): string {
+  if (!root) return '';
+  const el = root as Element;
+  const raw = 'innerText' in el && typeof el.innerText === 'string' ? el.innerText : el.textContent || '';
+  return raw
+    .split('\n')
+    .map((line) => cleanText(line))
+    .filter(Boolean)
+    .slice(0, maxLines)
+    .join('\n');
+}
+
 function cleanJobDescription(text: string, company: string): string {
   let out = cleanText(text).replace(/^about the job\s*/i, '');
-  if (company) {
-    const bare = company.replace(/,?\s*(inc\.?|llc|ltd\.?)$/i, '').trim();
-    if (bare) out = out.replace(new RegExp(`^${escapeRegExp(bare)}\\s*`, 'i'), '');
+  const bare = company.replace(/,?\s*(inc\.?|llc|ltd\.?)$/i, '').trim();
+  if (bare) {
+    out = out.replace(new RegExp(`([a-z0-9])(${escapeRegExp(bare)})`, 'i'), '$1 $2');
+    out = out.replace(new RegExp(`^${escapeRegExp(bare)}\\s*`, 'i'), '');
   }
+  out = out
+    .replace(/\.([A-Z])/g, '. $1')
+    .replace(/:([A-Z])/g, ': $1')
+    .replace(/\?([A-Z])/g, '? $1');
+  out = out.replace(/([a-z])([A-Z][a-z]{3,})/g, '$1 $2');
+  out = out.replace(/\s*(?:…|\.{3}|…)\s*more\s*$/i, '');
+  out = out.replace(/\s*(?:see more|show more|see full description)\s*$/i, '');
+  return flattenLines(out);
+}
+
+function mergeMeta(
+  primary: VisibleJobMeta | undefined,
+  fallback: ReturnType<typeof parseVisibleJobMeta>,
+) {
+  if (!primary) return fallback;
+  const merged = { ...fallback };
+  for (const key of Object.keys(fallback) as Array<keyof typeof fallback>) {
+    if (primary[key]) merged[key] = primary[key];
+  }
+  return merged;
+}
+
+function firstRealLocation(...candidates: Array<string | undefined | null>): string {
+  for (const candidate of candidates) {
+    const location = locationFromBlob(candidate ?? '');
+    if (location) return location;
+  }
+  return '';
+}
+
+function firstCompanyName(root: ParentNode | null, selectors: string[]): string {
+  if (!root) return '';
+  for (const selector of selectors) {
+    try {
+      for (const el of root.querySelectorAll(selector)) {
+        const cleaned = cleanCompanyName(el.textContent || '');
+        if (cleaned) return cleaned;
+      }
+    } catch {
+      // Invalid selector — skip.
+    }
+  }
+  return '';
+}
+
+function cleanCompanyName(value: string | undefined | null): string {
+  let out = cleanText(value)
+    .replace(/^company logo for[,.\s]*/i, '')
+    .replace(/^company[,.\s]+/i, '')
+    .replace(/(Inc)\.+$/i, '$1.')
+    .replace(/\s+logo$/i, '');
+  const lines = [...new Set(out.split(/\n+/).map((line) => cleanText(line)).filter(Boolean))];
+  out = lines.find((line) => !/^company logo for/i.test(line)) || lines[0] || '';
   return cleanText(out);
 }
 
-function locationFromText(text: string): string {
-  const cleaned = cleanText(text);
-  const workplace = cleaned.match(/\b(Remote|Hybrid|On-?site)\b[^\n·•|]{0,40}/i);
-  const city = cleaned.match(
-    /\b([A-Z][a-zA-Z.]+(?:\s+[A-Z][a-zA-Z.]+){0,2}),\s*([A-Z]{2}|[A-Z][a-zA-Z]+)(?:\s*[·•,]\s*(Remote|Hybrid|On-?site))?/,
-  );
-  if (city) return cleanText(city[0]);
-  if (workplace) return cleanText(workplace[0]);
-  return '';
+function normalizeCompanyUrl(href: string): string {
+  if (!href) return '';
+  try {
+    const parsed = new URL(href);
+    const match = parsed.pathname.match(/^\/(?:company|school)\/([^/]+)/i);
+    if (match?.[1]) {
+      const kind = parsed.pathname.startsWith('/school/') ? 'school' : 'company';
+      return `https://www.linkedin.com/${kind}/${match[1]}`;
+    }
+  } catch {
+    return href;
+  }
+  return href;
+}
+
+function guessedCompanyUrl(company: string): string {
+  const slug = company
+    .toLowerCase()
+    .replace(/,?\s*(inc\.?|llc|ltd\.?|corp\.?)$/i, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return slug ? `https://www.linkedin.com/company/${slug}` : '';
 }
 
 function escapeRegExp(value: string): string {

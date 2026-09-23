@@ -8,6 +8,13 @@ export function cleanText(value: string | null | undefined): string {
     .trim();
 }
 
+export function flattenLines(value: string | null | undefined): string {
+  return cleanText(value)
+    .replace(/[\r\n]+/g, ' ')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
+}
+
 export function firstLine(value: string, max = 140): string {
   const line = cleanText(value).split('\n')[0] ?? '';
   if (line.length <= max) return line;

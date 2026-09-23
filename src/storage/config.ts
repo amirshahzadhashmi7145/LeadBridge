@@ -59,7 +59,34 @@ export const DEFAULT_COLUMN_MAP: ColumnMap[] = [
   { field: 'lastUpdatedBy', header: 'Last Updated By' },
   { field: 'lastUpdatedAt', header: 'Last Updated At' },
   { field: 'platformLeadId', header: 'Platform Lead ID' },
-  { field: 'platformFields', header: 'Platform Fields' },
+  { field: 'employmentType', header: 'Employment Type' },
+  { field: 'datePosted', header: 'Posting Date' },
+  { field: 'workplaceType', header: 'Workplace Type' },
+  { field: 'jobInsights', header: 'Job Insights' },
+  { field: 'companyIndustry', header: 'Industry' },
+  { field: 'companySize', header: 'Company Size' },
+  { field: 'companyWebsite', header: 'Company Website' },
+  { field: 'companyFollowers', header: 'Company Followers' },
+  { field: 'linkedInHeadcount', header: 'Employees on LinkedIn' },
+  { field: 'candidateSeniority', header: 'Candidate Seniority' },
+  { field: 'candidateEducation', header: 'Candidate Education' },
+  { field: 'hiringTrend', header: 'Hiring Trend' },
+  { field: 'employeeTenure', header: 'Median Employee Tenure' },
+  { field: 'experienceLevel', header: 'Experience Level' },
+  { field: 'jobFunction', header: 'Job Function' },
+  { field: 'pricingType', header: 'Hourly / Fixed-price' },
+  { field: 'duration', header: 'Project Duration' },
+  { field: 'category', header: 'Job Category' },
+  { field: 'proposals', header: 'Proposals' },
+  { field: 'clientRating', header: 'Client Rating' },
+  { field: 'jobsPosted', header: 'Jobs Posted' },
+  { field: 'totalHires', header: 'Total Hires' },
+  { field: 'totalSpent', header: 'Total Spent' },
+  { field: 'clientHistory', header: 'Client History' },
+  { field: 'authorHeadline', header: 'Author Headline' },
+  { field: 'postTimestamp', header: 'Post Date' },
+  { field: 'postLinks', header: 'Post Links' },
+  { field: 'platformFields', header: 'Other Platform Fields' },
 ];
 
 export function defaultConfig(): AppConfig {
@@ -98,8 +125,21 @@ export async function getConfig(): Promise<AppConfig> {
     enabledPlatforms: value.enabledPlatforms?.length
       ? value.enabledPlatforms
       : defaultConfig().enabledPlatforms,
-    columnMap: value.columnMap?.length ? value.columnMap : defaultConfig().columnMap,
+    columnMap: mergeColumnMap(value.columnMap),
   };
+}
+
+export function mergeColumnMap(saved?: ColumnMap[]): ColumnMap[] {
+  const current = saved?.length ? saved.map((item) => ({ ...item })) : [];
+  if (!current.length) return DEFAULT_COLUMN_MAP.map((item) => ({ ...item }));
+  const seen = new Set(current.map((item) => item.field));
+  const missing = DEFAULT_COLUMN_MAP.filter((item) => !seen.has(item.field));
+  const leftover = current.findIndex((item) => item.field === 'platformFields');
+  if (leftover >= 0) {
+    current.splice(leftover, 0, ...missing.filter((item) => item.field !== 'platformFields'));
+    return current;
+  }
+  return [...current, ...missing];
 }
 
 export async function saveConfig(config: AppConfig): Promise<AppConfig> {

@@ -1,6 +1,7 @@
 import { currentUser, signIn, signOut } from '@/auth/google';
 import type { ExtensionMessage, PageState } from '@/messaging/types';
 import { findAdapter } from '@/platforms/registry';
+import { parseSpreadsheetId } from '@/sheets/ids';
 import { DuplicateError, SameUserDuplicateError, checkDuplicate, saveLead } from '@/sheets/save';
 import {
   getConfig,
@@ -91,7 +92,7 @@ async function handle(message: ExtensionMessage, sender: { tab?: { id?: number }
 function sanitizeConfig(config: AppConfig): AppConfig {
   return {
     ...config,
-    spreadsheetId: config.spreadsheetId.trim(),
+    spreadsheetId: parseSpreadsheetId(config.spreadsheetId),
     sheetName: config.sheetName.trim() || 'Leads',
     googleClientId: config.googleClientId.trim(),
   };

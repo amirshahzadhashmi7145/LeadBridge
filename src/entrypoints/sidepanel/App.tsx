@@ -54,9 +54,15 @@ export default function App() {
         setFields([]);
         return;
       }
-      const extracted = await sendMessage<{ ok: true; extraction: ExtractResponse }>({
+      let extracted = await sendMessage<{ ok: true; extraction: ExtractResponse }>({
         type: 'EXTRACT_LEAD',
       });
+      if (shouldRetryExtract(extracted.extraction)) {
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        extracted = await sendMessage<{ ok: true; extraction: ExtractResponse }>({
+          type: 'EXTRACT_LEAD',
+        });
+      }
       applyExtraction(extracted.extraction);
     } catch (error) {
       setBanner({
@@ -68,26 +74,41 @@ export default function App() {
     }
   }, []);
 
-  const lastUrl = useRef('');
+  const lastKey = useRef('');
 
   useEffect(() => {
-    const sync = async () => {
+    const pageKey = (url: string) => {
+      try {
+        const parsed = new URL(url);
+        return (
+          parsed.searchParams.get('currentJobId') ||
+          parsed.pathname + parsed.search
+        );
+      } catch {
+        return url;
+      }
+    };
+    const sync = async (force = false) => {
       const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
       const url = tab?.url ?? '';
-      if (!url || url === lastUrl.current) return;
-      lastUrl.current = url;
+      const key = pageKey(url);
+      if (!url || (!force && key === lastKey.current)) return;
+      lastKey.current = key;
       await load();
     };
-    void sync();
+    void sync(true);
     const onActivated = () => {
-      void sync();
+      lastKey.current = '';
+      void sync(true);
     };
     const onUpdated = (
       _id: number,
       info: { url?: string; status?: string },
       tab: { active?: boolean },
     ) => {
-      if (tab.active && (info.url || info.status === 'complete')) void sync();
+      if (!tab.active) return;
+      if (info.url) void sync(true);
+      else if (info.status === 'complete') void sync();
     };
     browser.tabs.onActivated.addListener(onActivated);
     browser.tabs.onUpdated.addListener(onUpdated);
@@ -144,6 +165,19 @@ export default function App() {
     } else {
       setBanner({ tone: 'success', text: 'All expected fields were extracted. Review them before saving.' });
     }
+  }
+
+  function shouldRetryExtract(result: ExtractResponse): boolean {
+    if (!result || result.ok === false) return result?.pageType === 'job';
+    if (result.sourceName !== 'LinkedIn' || result.pageType !== 'job') return false;
+    const extras = result.lead.platformFields;
+    return (
+      !result.lead.location ||
+      !extras.employmentType ||
+      !extras.workplaceType ||
+      !extras.companySize ||
+      result.missingFields.length > 4
+    );
   }
 
   async function selectPost(postId: string) {
@@ -265,7 +299,9 @@ export default function App() {
         {setupWarning ? <StatusBanner tone="warn">{setupWarning}</StatusBanner> : null}
         {banner ? <StatusBanner tone={banner.tone}>{banner.text}</StatusBanner> : null}
 
-        {!page || busy && !lead ? <div className="card muted">Reading the current page…</div> : null}
+        {!page || (busy && !lead) ? (
+          <div className="card muted">Waiting for the page to finish loading…</div>
+        ) : null}
 
         {page && page.status === 'unknown_platform' ? (
           <div className="card empty">

@@ -119,17 +119,23 @@ export default function OptionsApp() {
             <input
               id="spreadsheetId"
               value={config.spreadsheetId}
-              placeholder="From the sheet URL: docs.google.com/spreadsheets/d/THIS_PART/edit"
+              placeholder="Paste the full sheet URL or the ID after /d/"
               onChange={(event) => setConfig({ ...config, spreadsheetId: event.target.value })}
             />
           </div>
           <div className="field">
-            <label htmlFor="sheetName">Tab name</label>
+            <label htmlFor="sheetName">Sheet tab (bottom of the spreadsheet)</label>
             <input
               id="sheetName"
               value={config.sheetName}
+              placeholder="Usually Sheet1"
               onChange={(event) => setConfig({ ...config, sheetName: event.target.value })}
             />
+            <p className="muted">
+              This is the tab at the bottom of Google Sheets, like <strong>Sheet1</strong>. It is not a
+              column. If you type <strong>LeadBridge</strong> and that tab does not exist, the
+              extension will create it.
+            </p>
           </div>
           <div className="field">
             <label htmlFor="clientId">OAuth client ID (Web application)</label>

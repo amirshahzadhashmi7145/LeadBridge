@@ -10,7 +10,7 @@ import {
   type PageType,
   type PostCandidate,
 } from '@/schema/lead';
-import { hashId } from '@/utils/text';
+import { flattenLines, hashId } from '@/utils/text';
 import { normalizeUrl } from '@/utils/url';
 
 export class ExtractionBuilder {
@@ -44,7 +44,8 @@ export class ExtractionBuilder {
     if (key === 'platformFields' || key === 'leadType' || key === 'status') {
       return this;
     }
-    const cleaned = (value ?? '').toString().trim();
+    let cleaned = (value ?? '').toString().trim();
+    if (key === 'jobDescription') cleaned = flattenLines(cleaned);
     (this.lead[key] as string) = cleaned;
     this.status.set(key, cleaned ? 'found' : 'missing');
     return this;

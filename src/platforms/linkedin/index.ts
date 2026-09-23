@@ -5,6 +5,7 @@ import { pathOf, searchParam } from '@/utils/url';
 import { extractLinkedInCompany, linkedinCompanySlug } from './company';
 import { extractLinkedInJob, linkedinJobId } from './jobs';
 import { extractLinkedInPost, postCandidates } from './posts';
+import { waitForLinkedInJobExtras } from './ready';
 
 function pageType(url: URL, doc?: Document): PageType {
   const path = url.pathname;
@@ -49,8 +50,16 @@ export const linkedinAdapter: PlatformAdapter = {
     );
 
     if (type === 'job') {
-      extractLinkedInJob(builder, ctx);
-      return builder.result('job');
+      await extractLinkedInJob(builder, ctx);
+      let result = builder.result('job');
+      if (jobExtractIncomplete(result.lead)) {
+        await waitForLinkedInJobExtras(ctx.document, linkedinJobId(ctx.url.toString()));
+        const retry = new ExtractionBuilder('linkedin', 'LinkedIn', 'job', ctx.url.toString());
+        await extractLinkedInJob(retry, ctx, { skipWait: true });
+        const second = retry.result('job');
+        if (foundCount(second) >= foundCount(result)) result = second;
+      }
+      return result;
     }
     if (type === 'company') {
       extractLinkedInCompany(builder, ctx);
@@ -93,3 +102,16 @@ export const linkedinAdapter: PlatformAdapter = {
     return identity;
   },
 };
+
+function jobExtractIncomplete(lead: { location: string; platformFields: Record<string, string> }) {
+  return (
+    !lead.location ||
+    !lead.platformFields.employmentType ||
+    !lead.platformFields.workplaceType ||
+    !lead.platformFields.companySize
+  );
+}
+
+function foundCount(result: { foundFields: string[] }) {
+  return result.foundFields.length;
+}
