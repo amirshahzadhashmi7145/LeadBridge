@@ -5,8 +5,16 @@ import { extractUpworkJob, upworkJobId } from './jobs';
 
 function pageType(url: URL): PageType {
   const path = url.pathname;
-  if (path.includes('/jobs/')) return 'job';
-  if (path.includes('/ab/applicants/') || path.includes('/nx/find-work/')) return 'job';
+  if (
+    path.includes('/jobs/') ||
+    path.includes('/job/') ||
+    path.includes('/nx/find-work/') ||
+    path.includes('/nx/proposals/') ||
+    path.includes('/ab/applicants/') ||
+    /~[A-Za-z0-9]{8,}/.test(url.href)
+  ) {
+    return 'job';
+  }
   if (path.includes('/freelancers/') || path.includes('/agencies/')) return 'profile';
   return 'unsupported';
 }
@@ -25,7 +33,7 @@ export const upworkAdapter: PlatformAdapter = {
     const type = pageType(ctx.url);
     const builder = new ExtractionBuilder('upwork', 'Upwork', type, ctx.url.toString());
     if (type === 'job') {
-      extractUpworkJob(builder, ctx);
+      await extractUpworkJob(builder, ctx);
       return builder.result('job');
     }
     builder
