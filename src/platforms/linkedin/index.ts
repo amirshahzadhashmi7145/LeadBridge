@@ -12,6 +12,7 @@ function pageType(url: URL, doc?: Document): PageType {
     path.includes('/jobs/view/') ||
     path.includes('/jobs/collections/') ||
     path.includes('/jobs/search/') ||
+    path.includes('/jobs/search-results/') ||
     searchParam(url.toString(), 'currentJobId')
   ) {
     return 'job';

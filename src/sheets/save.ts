@@ -1,7 +1,7 @@
 import { requireSession } from '@/auth/google';
 import { identityFromLead } from '@/platforms/builder';
 import type { Lead } from '@/schema/lead';
-import { getConfig, saveDraft, type GoogleUser } from '@/storage/config';
+import { getConfig, saveDraft, setupProblems, type GoogleUser } from '@/storage/config';
 import { hashId } from '@/utils/text';
 import { logger } from '@/utils/logger';
 import { loadSheet, writeLeadRow } from './client';
@@ -24,6 +24,8 @@ export class SameUserDuplicateError extends Error {
 
 export async function checkDuplicate(lead: Lead): Promise<DuplicateMatch | null> {
   const config = await getConfig();
+  const setupError = setupProblems(config);
+  if (setupError) throw new Error(setupError);
   const session = await requireSession();
   const snapshot = await loadSheet(session.accessToken, config);
   return findDuplicate(snapshot, config, identityFromLead(lead), session.user.email);
@@ -35,6 +37,8 @@ export async function saveLead(
   existingRow?: number,
 ): Promise<SaveResult> {
   const config = await getConfig();
+  const setupError = setupProblems(config);
+  if (setupError) throw new Error(setupError);
   const session = await requireSession();
   const now = new Date().toISOString();
   const prepared = applyAudit(lead, session.user, now, action !== 'update');

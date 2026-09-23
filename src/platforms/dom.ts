@@ -17,8 +17,18 @@ export function firstEl(
 }
 
 export function firstText(root: ParentNode, selectors: string[]): string {
-  const el = firstEl(root, selectors);
-  return cleanText(el?.textContent);
+  for (const selector of selectors) {
+    try {
+      const nodes = root.querySelectorAll(selector);
+      for (const el of nodes) {
+        const text = cleanText(el.textContent);
+        if (text) return text;
+      }
+    } catch {
+      // Invalid selector — skip.
+    }
+  }
+  return '';
 }
 
 export function firstAttr(
@@ -31,8 +41,18 @@ export function firstAttr(
 }
 
 export function firstHref(root: ParentNode, selectors: string[], base: string): string {
-  const href = firstAttr(root, selectors, 'href');
-  return href ? absoluteUrl(href, base) : '';
+  for (const selector of selectors) {
+    try {
+      const nodes = root.querySelectorAll(selector);
+      for (const el of nodes) {
+        const href = cleanText(el.getAttribute('href'));
+        if (href && href !== '#') return absoluteUrl(href, base);
+      }
+    } catch {
+      // Invalid selector — skip.
+    }
+  }
+  return '';
 }
 
 export function allText(root: ParentNode, selectors: string[]): string[] {

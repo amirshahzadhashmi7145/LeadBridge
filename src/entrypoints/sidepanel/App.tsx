@@ -9,7 +9,7 @@ import {
   type Lead,
 } from '@/schema/lead';
 import type { DuplicateMatch } from '@/sheets/types';
-import type { GoogleUser } from '@/storage/config';
+import type { AppConfig, GoogleUser } from '@/storage/config';
 import { DuplicateDialog } from '@/ui/DuplicateDialog';
 import { FieldRow } from '@/ui/FieldRow';
 import { StatusBanner } from '@/ui/StatusBanner';
@@ -26,6 +26,7 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [banner, setBanner] = useState<Banner>(null);
   const [duplicate, setDuplicate] = useState<DuplicateMatch | null>(null);
+  const [setupWarning, setSetupWarning] = useState('');
 
   const load = useCallback(async () => {
     setBusy(true);
@@ -36,6 +37,15 @@ export default function App() {
         type: 'GET_SESSION',
       });
       setUser(session.user);
+      const cfg = await sendMessage<{ ok: true; config: AppConfig }>({ type: 'GET_CONFIG' });
+      const missing: string[] = [];
+      if (!cfg.config.googleClientId.trim()) missing.push('OAuth Client ID');
+      if (!cfg.config.spreadsheetId.trim()) missing.push('Google Sheet ID');
+      setSetupWarning(
+        missing.length
+          ? `Settings still need: ${missing.join(' and ')}. Open Settings, save them, then sign in.`
+          : '',
+      );
       const state = await sendMessage<{ ok: true; page: PageState }>({ type: 'GET_PAGE_STATE' });
       setPage(state.page);
       if (state.page.status !== 'ready') {
@@ -175,7 +185,13 @@ export default function App() {
   async function signIn() {
     setBusy(true);
     try {
-      const response = await sendMessage<{ ok: true; user: GoogleUser }>({ type: 'GOOGLE_SIGN_IN' });
+      const response = await sendMessage<{ ok: boolean; user?: GoogleUser; error?: string }>({
+        type: 'GOOGLE_SIGN_IN',
+      });
+      if (!response.ok || !response.user) {
+        setBanner({ tone: 'error', text: response.error || 'Google sign-in failed.' });
+        return;
+      }
       setUser(response.user);
       setBanner({ tone: 'success', text: `Signed in as ${response.user.name}` });
     } catch (error) {
@@ -246,6 +262,7 @@ export default function App() {
       </header>
 
       <main className="page">
+        {setupWarning ? <StatusBanner tone="warn">{setupWarning}</StatusBanner> : null}
         {banner ? <StatusBanner tone={banner.tone}>{banner.text}</StatusBanner> : null}
 
         {!page || busy && !lead ? <div className="card muted">Reading the current page…</div> : null}

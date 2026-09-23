@@ -50,18 +50,19 @@ Lead captured, Message sent, Application submitted, Proposal sent, Client replie
 
 LeadBridge uses the signed-in user's Google account. It never stores Google or platform passwords.
 
-**Option A — Chrome identity client (packaged / stable ID)**
+`Error 400: redirect_uri_mismatch` means the OAuth client is the wrong type, or the redirect URL is missing.
 
-1. Create a Google Cloud project.
-2. Enable the Google Sheets API and People / userinfo scopes.
-3. Create an OAuth client of type **Chrome extension**.
-4. Put the client ID in `.env` as `WXT_GOOGLE_CLIENT_ID` and rebuild.
+Use a **Web application** client (recommended for unpacked installs):
 
-**Option B — Web client (unpacked / easiest while developing)**
+1. [Google Cloud Credentials](https://console.cloud.google.com/apis/credentials) → enable **Google Sheets API**.
+2. Create OAuth client → type **Web application** (not Chrome extension, not Desktop).
+3. Authorized redirect URIs — add both, then Save:
+   - `https://nmcgiafjblnaeklmecclldpbcaahnign.chromiumapp.org/`
+   - `https://nmcgiafjblnaeklmecclldpbcaahnign.chromiumapp.org`
+4. Copy the Client ID into LeadBridge **Settings** → OAuth client ID → Save settings.
+5. Sign in again.
 
-1. Create an OAuth client of type **Web application**.
-2. Add the redirect URL shown on the LeadBridge settings page (`https://<extension-id>.chromiumapp.org/`).
-3. Paste that client ID into Settings → OAuth client ID.
+If Chrome still shows a different extension ID on `chrome://extensions`, use the redirect URL printed in Settings instead. After changing the manifest `key`, remove the old unpacked install and load it again.
 
 ## Adding a platform later
 

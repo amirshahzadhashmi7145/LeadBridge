@@ -12,11 +12,18 @@ export default function OptionsApp() {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [drafts, setDrafts] = useState<PendingDraft[]>([]);
   const [redirectUrl, setRedirectUrl] = useState('');
+  const [extensionId, setExtensionId] = useState('');
   const [banner, setBanner] = useState<string>('');
   const [error, setError] = useState('');
 
   useEffect(() => {
-    setRedirectUrl(browser.identity.getRedirectURL());
+    const chromeApi = (
+      globalThis as typeof globalThis & {
+        chrome?: { identity?: { getRedirectURL?: () => string }; runtime?: { id?: string } };
+      }
+    ).chrome;
+    setRedirectUrl(chromeApi?.identity?.getRedirectURL?.() || browser.identity.getRedirectURL());
+    setExtensionId(browser.runtime.id);
     void reload();
   }, []);
 
@@ -45,12 +52,26 @@ export default function OptionsApp() {
 
   async function signIn() {
     try {
-      const response = await sendMessage<{ ok: true; user: GoogleUser }>({ type: 'GOOGLE_SIGN_IN' });
+      if (config.googleClientId.trim()) {
+        await persist();
+      }
+      const response = await sendMessage<{ ok: boolean; user?: GoogleUser; error?: string }>({
+        type: 'GOOGLE_SIGN_IN',
+      });
+      if (!response.ok || !response.user) {
+        setError(response.error || 'Sign-in failed.');
+        return;
+      }
       setUser(response.user);
       setBanner(`Signed in as ${response.user.name} (${response.user.email})`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Sign-in failed.');
     }
+  }
+
+  async function copy(value: string) {
+    await navigator.clipboard.writeText(value);
+    setBanner('Copied.');
   }
 
   return (
@@ -111,7 +132,7 @@ export default function OptionsApp() {
             />
           </div>
           <div className="field">
-            <label htmlFor="clientId">OAuth client ID (for unpacked / web auth flow)</label>
+            <label htmlFor="clientId">OAuth client ID (Web application)</label>
             <input
               id="clientId"
               value={config.googleClientId}
@@ -119,10 +140,38 @@ export default function OptionsApp() {
               onChange={(event) => setConfig({ ...config, googleClientId: event.target.value })}
             />
           </div>
+          <p className="banner warn">
+            Keep only <strong>one</strong> LeadBridge installed. Two copies have two IDs, and Google
+            will block sign-in. This copy&apos;s ID is <code>{extensionId}</code>.
+          </p>
+          <ol className="muted setup-steps">
+            <li>
+              Open the <strong>same</strong> Web application OAuth client you already created.
+            </li>
+            <li>
+              Under <strong>Authorized redirect URIs</strong> add both URLs below, then Save. Wait 1–2
+              minutes.
+            </li>
+          </ol>
+          <div className="copy-row">
+            <code>{redirectUrl || 'Reload the extension to see this URL.'}</code>
+            <button className="secondary" type="button" onClick={() => void copy(redirectUrl)}>
+              Copy
+            </button>
+          </div>
+          <div className="copy-row">
+            <code>{redirectUrl.replace(/\/$/, '')}</code>
+            <button
+              className="secondary"
+              type="button"
+              onClick={() => void copy(redirectUrl.replace(/\/$/, ''))}
+            >
+              Copy
+            </button>
+          </div>
           <p className="muted">
-            Authorized redirect URL to add in Google Cloud:
-            <br />
-            <code>{redirectUrl || 'Load the extension once to generate this URL.'}</code>
+            Extension ID: <code>{extensionId}</code>. After saving the client, paste the Client ID
+            above, click <strong>Save settings</strong>, then Sign in.
           </p>
         </section>
 

@@ -79,11 +79,21 @@ const SESSION_KEY = 'leadbridge.session';
 const DRAFTS_KEY = 'leadbridge.drafts';
 
 export async function getConfig(): Promise<AppConfig> {
-  const stored = await browser.storage.sync.get(CONFIG_KEY);
-  const value = stored[CONFIG_KEY] as AppConfig | undefined;
-  if (!value) return defaultConfig();
-  return {
+  const [syncStored, localStored] = await Promise.all([
+    browser.storage.sync.get(CONFIG_KEY).catch(() => ({})),
+    browser.storage.local.get(CONFIG_KEY).catch(() => ({})),
+  ]);
+  const syncValue = (syncStored as Record<string, AppConfig | undefined>)[CONFIG_KEY];
+  const localValue = (localStored as Record<string, AppConfig | undefined>)[CONFIG_KEY];
+  const value = {
     ...defaultConfig(),
+    ...syncValue,
+    ...localValue,
+    googleClientId: pickFilled(localValue?.googleClientId, syncValue?.googleClientId),
+    spreadsheetId: pickFilled(localValue?.spreadsheetId, syncValue?.spreadsheetId),
+    sheetName: pickFilled(localValue?.sheetName, syncValue?.sheetName) || 'Leads',
+  };
+  return {
     ...value,
     enabledPlatforms: value.enabledPlatforms?.length
       ? value.enabledPlatforms
@@ -93,21 +103,55 @@ export async function getConfig(): Promise<AppConfig> {
 }
 
 export async function saveConfig(config: AppConfig): Promise<AppConfig> {
-  await browser.storage.sync.set({ [CONFIG_KEY]: config });
+  await Promise.all([
+    browser.storage.local.set({ [CONFIG_KEY]: config }),
+    browser.storage.sync.set({ [CONFIG_KEY]: config }).catch(() => undefined),
+  ]);
   return config;
 }
 
+export function setupProblems(config: AppConfig): string | null {
+  if (!config.googleClientId.trim()) {
+    return 'Open Settings, paste your Google OAuth Client ID, click Save settings, then sign in.';
+  }
+  if (!config.spreadsheetId.trim()) {
+    return 'Open Settings and paste the Google Sheet ID before saving a lead.';
+  }
+  return null;
+}
+
+function pickFilled(...values: Array<string | undefined>): string {
+  return values.find((value) => value?.trim())?.trim() ?? '';
+}
+
 export async function getSession(): Promise<StoredSession | null> {
-  const stored = await browser.storage.session.get(SESSION_KEY);
-  return (stored[SESSION_KEY] as StoredSession | undefined) ?? null;
+  const [sessionStore, localStore] = await Promise.all([
+    browser.storage.session.get(SESSION_KEY).catch(() => ({})),
+    browser.storage.local.get(SESSION_KEY).catch(() => ({})),
+  ]);
+  const session =
+    ((sessionStore as Record<string, StoredSession | undefined>)[SESSION_KEY] ??
+      (localStore as Record<string, StoredSession | undefined>)[SESSION_KEY]) ||
+    null;
+  if (session && session.expiresAt <= Date.now()) {
+    await clearSession();
+    return null;
+  }
+  return session;
 }
 
 export async function saveSession(session: StoredSession): Promise<void> {
-  await browser.storage.session.set({ [SESSION_KEY]: session });
+  await Promise.all([
+    browser.storage.session.set({ [SESSION_KEY]: session }).catch(() => undefined),
+    browser.storage.local.set({ [SESSION_KEY]: session }),
+  ]);
 }
 
 export async function clearSession(): Promise<void> {
-  await browser.storage.session.remove(SESSION_KEY);
+  await Promise.all([
+    browser.storage.session.remove(SESSION_KEY).catch(() => undefined),
+    browser.storage.local.remove(SESSION_KEY),
+  ]);
 }
 
 export async function getDrafts(): Promise<PendingDraft[]> {

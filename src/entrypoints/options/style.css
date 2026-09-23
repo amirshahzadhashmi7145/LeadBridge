@@ -59,3 +59,27 @@ th, td {
 }
 
 .platforms input { width: auto; }
+
+.setup-steps {
+  padding-left: 18px;
+  margin: 0 0 12px;
+}
+
+.setup-steps li { margin-bottom: 6px; }
+
+.copy-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.copy-row code {
+  flex: 1;
+  overflow-wrap: anywhere;
+  background: #f4f6f8;
+  padding: 8px;
+  border-radius: 8px;
+}
+
+.copy-row button { flex: 0 0 auto; }
