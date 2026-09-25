@@ -10,6 +10,7 @@ import {
   type PageType,
   type PostCandidate,
 } from '@/schema/lead';
+import { absoluteDateValue } from '@/utils/date';
 import { flattenLines, hashId } from '@/utils/text';
 import { normalizeUrl } from '@/utils/url';
 
@@ -46,6 +47,7 @@ export class ExtractionBuilder {
     }
     let cleaned = (value ?? '').toString().trim();
     if (key === 'jobDescription') cleaned = flattenLines(cleaned);
+    cleaned = absoluteDateValue(String(key), cleaned);
     (this.lead[key] as string) = cleaned;
     this.status.set(key, cleaned ? 'found' : 'missing');
     return this;
@@ -58,7 +60,7 @@ export class ExtractionBuilder {
   }
 
   extra(key: string, label: string, value: string | undefined | null): this {
-    const cleaned = (value ?? '').toString().trim();
+    const cleaned = absoluteDateValue(key, (value ?? '').toString().trim(), label);
     if (cleaned) this.lead.platformFields[key] = cleaned;
     this.extras.push({
       key,

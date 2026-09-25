@@ -16,6 +16,15 @@ export function firstEl(
   return null;
 }
 
+export function firstDatetime(root: ParentNode): string {
+  try {
+    const el = root.querySelector('time[datetime]');
+    return cleanText(el?.getAttribute('datetime'));
+  } catch {
+    return '';
+  }
+}
+
 export function firstText(root: ParentNode, selectors: string[]): string {
   for (const selector of selectors) {
     try {

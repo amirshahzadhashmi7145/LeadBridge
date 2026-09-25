@@ -1,5 +1,6 @@
 import {
   asString,
+  firstDatetime,
   firstEl,
   firstHref,
   firstText,
@@ -199,7 +200,11 @@ export async function extractLinkedInJob(
     .extra(
       'datePosted',
       'Posting date',
-      visible.posted || facts.posted || embedded.datePosted || asString(jsonLd?.datePosted),
+      firstDatetime(pane) ||
+        visible.posted ||
+        facts.posted ||
+        embedded.datePosted ||
+        asString(jsonLd?.datePosted),
     )
     .extra(
       'workplaceType',

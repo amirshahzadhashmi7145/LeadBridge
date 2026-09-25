@@ -1,6 +1,7 @@
 import { firstHref, firstText, isMostlyVisible, visibleOverlap } from '@/platforms/dom';
 import { ExtractionBuilder } from '@/platforms/builder';
 import type { PostCandidate } from '@/schema/lead';
+import { toAbsoluteDate } from '@/utils/date';
 import { cleanText, firstLine } from '@/utils/text';
 import { absoluteUrl } from '@/utils/url';
 
@@ -42,7 +43,7 @@ export function postCandidates(doc: Document): PostCandidate[] {
       id: extracted.id,
       author: extracted.author,
       snippet: firstLine(extracted.text, 160),
-      timestamp: extracted.timestamp,
+      timestamp: toAbsoluteDate(extracted.timestamp) || extracted.timestamp,
     };
   });
 }
@@ -94,6 +95,17 @@ export function extractLinkedInPost(
   return builder;
 }
 
+function postTimestamp(el: HTMLElement): string {
+  const time = el.querySelector('time');
+  const datetime = time?.getAttribute('datetime') || time?.dateTime;
+  if (datetime) return datetime;
+  return firstText(el, [
+    '.update-components-actor__sub-description span[aria-hidden="true"]',
+    'time',
+    '.feed-shared-actor__sub-description',
+  ]);
+}
+
 function mostDominantPost(posts: HTMLElement[]): HTMLElement | undefined {
   if (posts.length === 0) return undefined;
   if (posts.length === 1) return posts[0];
@@ -119,11 +131,7 @@ function readPost(el: HTMLElement, base: string) {
     '.update-components-actor__sub-description',
     '.feed-shared-actor__description',
   ]);
-  const timestamp = firstText(el, [
-    '.update-components-actor__sub-description span[aria-hidden="true"]',
-    'time',
-    '.feed-shared-actor__sub-description',
-  ]);
+  const timestamp = postTimestamp(el);
   const text = firstText(el, [
     '.feed-shared-update-v2__description',
     '.update-components-text',

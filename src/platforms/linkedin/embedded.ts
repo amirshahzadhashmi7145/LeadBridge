@@ -1,4 +1,5 @@
 import { asString } from '@/platforms/dom';
+import { toAbsoluteDate } from '@/utils/date';
 import { cleanText } from '@/utils/text';
 
 export interface EmbeddedJob {
@@ -137,10 +138,5 @@ function nestedUrl(value: unknown): string {
 }
 
 function formatMaybeEpoch(value: string): string {
-  const numeric = Number(value);
-  if (Number.isFinite(numeric) && numeric > 1_000_000_000) {
-    const ms = numeric > 10_000_000_000 ? numeric : numeric * 1000;
-    return new Date(ms).toISOString();
-  }
-  return cleanText(value);
+  return toAbsoluteDate(value) || cleanText(value);
 }
