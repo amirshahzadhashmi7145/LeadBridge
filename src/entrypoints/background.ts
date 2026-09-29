@@ -13,15 +13,45 @@ import {
 import { logger } from '@/utils/logger';
 import type { ExtractResponse } from '@/schema/lead';
 
+const PANEL_PATH = '/sidepanel.html';
+let ownerTabId: number | null = null;
+let ignoreDisconnectUntil = 0;
+
 export default defineBackground(() => {
-  void browser.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {
+  void browser.sidePanel.setPanelBehavior({ openPanelOnActionClick: false }).catch(() => {
     // Older Chromium builds may not support this helper.
   });
+  // Disable the window-wide panel so other tabs cannot fall back to it.
+  void browser.sidePanel.setOptions({ enabled: false }).catch(() => undefined);
 
   browser.action.onClicked.addListener((tab) => {
-    if (tab.id) {
-      void browser.sidePanel.open({ tabId: tab.id });
-    }
+    if (!tab.id) return;
+    const tabId = tab.id;
+    ownerTabId = tabId;
+    ignoreDisconnectUntil = Date.now() + 600;
+    void browser.sidePanel.setOptions({
+      tabId,
+      path: PANEL_PATH,
+      enabled: true,
+    });
+    void browser.sidePanel.open({ tabId });
+    void disablePanelOnOtherTabs(tabId);
+  });
+
+  browser.runtime.onConnect.addListener((port) => {
+    if (port.name !== 'leadbridge-sidepanel') return;
+    port.onDisconnect.addListener(() => {
+      void handlePanelDisconnect();
+    });
+  });
+
+  browser.tabs.onActivated.addListener(({ tabId }) => {
+    ignoreDisconnectUntil = Date.now() + 500;
+    void syncPanelForTab(tabId);
+  });
+
+  browser.tabs.onRemoved.addListener((tabId) => {
+    if (tabId === ownerTabId) ownerTabId = null;
   });
 
   browser.runtime.onMessage.addListener((message: ExtensionMessage, sender, sendResponse) => {
@@ -38,6 +68,46 @@ export default defineBackground(() => {
     return true;
   });
 });
+
+async function syncPanelForTab(tabId: number) {
+  const isOwner = ownerTabId != null && tabId === ownerTabId;
+  try {
+    await browser.sidePanel.setOptions({
+      tabId,
+      path: PANEL_PATH,
+      enabled: isOwner,
+    });
+    if (isOwner) {
+      await browser.sidePanel.open({ tabId }).catch(() => undefined);
+    }
+    if (isOwner) {
+      await browser.sidePanel.open({ tabId }).catch(() => undefined);
+    }
+  } catch {
+    // Ignore missing sidePanel.setOptions in older builds.
+  }
+}
+
+async function disablePanelOnOtherTabs(ownerId: number) {
+  const tabs = await browser.tabs.query({});
+  await Promise.all(
+    tabs
+      .filter((tab) => tab.id && tab.id !== ownerId)
+      .map((tab) =>
+        browser.sidePanel.setOptions({ tabId: tab.id, enabled: false }).catch(() => undefined),
+      ),
+  );
+}
+
+async function handlePanelDisconnect() {
+  if (Date.now() < ignoreDisconnectUntil) return;
+  const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+  const activeId = tab?.id;
+  if (ownerTabId == null || activeId !== ownerTabId) return;
+  const closed = ownerTabId;
+  ownerTabId = null;
+  await browser.sidePanel.setOptions({ tabId: closed, enabled: false }).catch(() => undefined);
+}
 
 async function handle(message: ExtensionMessage, sender: { tab?: { id?: number } }) {
   switch (message.type) {

@@ -4,6 +4,7 @@ import type { Lead } from '@/schema/lead';
 import { getConfig, saveDraft, setupProblems, type GoogleUser } from '@/storage/config';
 import { hashId } from '@/utils/text';
 import { logger } from '@/utils/logger';
+import { formatCalendarDate } from '@/utils/date';
 import { loadSheet, writeLeadRow } from './client';
 import { findDuplicate, ownershipMessage } from './duplicates';
 import type { DuplicateMatch, SaveResult } from './types';
@@ -40,7 +41,7 @@ export async function saveLead(
   const setupError = setupProblems(config);
   if (setupError) throw new Error(setupError);
   const session = await requireSession();
-  const now = new Date().toISOString();
+  const now = formatCalendarDate(new Date());
   const prepared = applyAudit(lead, session.user, now, action !== 'update');
 
   try {

@@ -1,6 +1,7 @@
 import type { Lead, LeadIdentity } from '@/schema/lead';
 import type { AppConfig } from '@/storage/config';
 import { normalizeUrl } from '@/utils/url';
+import { toAbsoluteDate } from '@/utils/date';
 import type { DuplicateMatch } from './types';
 import { snapshotLeads, type SheetSnapshot } from './client';
 
@@ -60,15 +61,7 @@ function emailsEqual(value: string | undefined, email: string): boolean {
   return value.toLowerCase() === lower || value.toLowerCase().includes(lower);
 }
 
-function formatWhen(iso: string): string {
-  if (!iso) return 'an unknown date';
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return iso;
-  return new Intl.DateTimeFormat('en-US', {
-    month: 'long',
-    day: 'numeric',
-    year: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  }).format(date);
+function formatWhen(value: string): string {
+  if (!value) return 'an unknown date';
+  return toAbsoluteDate(value) || value;
 }

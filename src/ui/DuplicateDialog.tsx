@@ -1,5 +1,6 @@
 import type { DuplicateMatch } from '@/sheets/types';
 import { ownershipMessage } from '@/sheets/duplicates';
+import { toAbsoluteDate } from '@/utils/date';
 
 interface Props {
   match: DuplicateMatch;
@@ -31,7 +32,7 @@ export function DuplicateDialog({ match, onUpdate, onCreate, onCancel }: Props) 
       <div className="dialog">
         <h2>This lead is already in the sheet</h2>
         <p>
-          You captured this lead{match.capturedAt ? ` on ${new Date(match.capturedAt).toLocaleString()}` : ''}.
+          You captured this lead{match.capturedAt ? ` on ${toAbsoluteDate(match.capturedAt) || match.capturedAt}` : ''}.
           Update the existing row, add another entry, or cancel.
         </p>
         <div className="actions" style={{ position: 'static', padding: '8px 0 0' }}>

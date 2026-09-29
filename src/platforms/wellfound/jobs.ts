@@ -1,7 +1,7 @@
 import { firstText } from '@/platforms/dom';
 import { ExtractionBuilder } from '@/platforms/builder';
 import { cleanText, firstLine, uniqueJoin } from '@/utils/text';
-import { formatCalendarDate } from '@/utils/date';
+import { formatCalendarDate, toAbsoluteDate } from '@/utils/date';
 import type { PostCandidate } from '@/schema/lead';
 import { absoluteUrl, pathOf, safeUrl } from '@/utils/url';
 import {
@@ -90,10 +90,11 @@ export async function extractWellfoundJob(
     ...visible.industry,
   ]);
   const contact = recruitingContact(store, job) || visible.contact;
-  const posted =
+  const posted = toAbsoluteDate(
     postedFromJob(job) ||
-    visible.posted ||
-    firstText(doc, ['time']);
+      visible.posted ||
+      firstText(doc, ['time']),
+  );
 
   builder
     .setType('job')
@@ -152,7 +153,7 @@ function postedFromJob(job: ApolloNode | null): string {
   if (structured) {
     try {
       const parsed = JSON.parse(structured) as { datePosted?: string };
-      if (parsed.datePosted) return parsed.datePosted;
+      if (parsed.datePosted) return toAbsoluteDate(parsed.datePosted) || parsed.datePosted;
     } catch {
       // Ignore broken JobPosting JSON.
     }
@@ -323,7 +324,7 @@ export function wellfoundJobCandidates(doc: Document): PostCandidate[] {
       id: wellfoundJobIdFromEl(card),
       author: parsed.company || parsed.title || 'Wellfound job',
       snippet: firstLine([parsed.title, parsed.compensation, parsed.location].filter(Boolean).join(' · '), 160),
-      timestamp: parsed.posted,
+      timestamp: toAbsoluteDate(parsed.posted) || parsed.posted,
     };
   });
 }
@@ -401,7 +402,9 @@ function visibleFromRoot(root: HTMLElement, pageUrl: string): VisibleJob {
   );
   const posted =
     cleanText(
-      text.match(/posted[:\s]+((?:today|just now|yesterday|\d+\s+(?:minute|hour|day|week|month|year)s?\s+ago))/i)?.[1] ||
+      text.match(
+        /posted[:\s]+((?:today|just now|yesterday|(?:an?|\d+)\s+(?:minute|hour|day|week|month|year)s?\s+ago))/i,
+      )?.[1] ||
         '',
     ) || labeledValue(text, 'posted');
   return {

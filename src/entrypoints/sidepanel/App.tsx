@@ -13,6 +13,7 @@ import type { AppConfig, GoogleUser } from '@/storage/config';
 import { DuplicateDialog } from '@/ui/DuplicateDialog';
 import { FieldRow } from '@/ui/FieldRow';
 import { StatusBanner } from '@/ui/StatusBanner';
+import { absoluteDateValue } from '@/utils/date';
 
 type Banner = { tone: 'success' | 'error' | 'warn' | 'info'; text: string } | null;
 
@@ -196,20 +197,30 @@ export default function App() {
   }
 
   function updateField(key: string, value: string) {
+    const extraKey = key.startsWith('platform:') ? key.slice('platform:'.length) : key;
+    const nextValue = absoluteDateValue(extraKey, value);
     setFields((current) =>
       current.map((field) =>
         field.key === key
-          ? { ...field, value, status: field.status === 'found' && field.value !== value ? 'edited' : field.status === 'missing' && value ? 'edited' : field.status }
+          ? {
+              ...field,
+              value: nextValue,
+              status:
+                field.status === 'found' && field.value !== nextValue
+                  ? 'edited'
+                  : field.status === 'missing' && nextValue
+                    ? 'edited'
+                    : field.status,
+            }
           : field,
       ),
     );
     setLead((current) => {
       if (!current) return current;
       if (key.startsWith('platform:')) {
-        const extraKey = key.slice('platform:'.length);
-        return { ...current, platformFields: { ...current.platformFields, [extraKey]: value } };
+        return { ...current, platformFields: { ...current.platformFields, [extraKey]: nextValue } };
       }
-      return { ...current, [key]: value };
+      return { ...current, [key]: nextValue };
     });
   }
 
