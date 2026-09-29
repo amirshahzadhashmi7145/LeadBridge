@@ -108,22 +108,34 @@ async function getPageState(): Promise<PageState> {
       title,
       tabId: tab?.id,
       status: 'unknown_platform',
-      message: 'Open a LinkedIn or Upwork page, then click LeadBridge again.',
+      message: 'Open a LinkedIn, Upwork, or Wellfound page, then click LeadBridge again.',
     };
   }
 
   const config = await getConfig();
-  const adapter = findAdapter(url, config.enabledPlatforms);
-  if (!adapter) {
+  const matched = findAdapter(url);
+  if (!matched) {
     return {
       url,
       title,
       tabId: tab?.id,
       status: 'unknown_platform',
       message:
-        "LeadBridge doesn't recognize this website yet. Supported platforms: LinkedIn and Upwork.",
+        "LeadBridge doesn't recognize this website yet. Supported platforms: LinkedIn, Upwork, and Wellfound.",
     };
   }
+  if (!config.enabledPlatforms.includes(matched.id)) {
+    return {
+      url,
+      title,
+      tabId: tab?.id,
+      platformId: matched.id,
+      sourceName: matched.sourceName,
+      status: 'unknown_platform',
+      message: `${matched.sourceName} is turned off in Settings. Enable it there, then try again.`,
+    };
+  }
+  const adapter = matched;
 
   try {
     const detect = (await sendToTab(tab!.id!, { type: 'CONTENT_DETECT' })) as {
@@ -242,6 +254,18 @@ async function sendToActiveTab(message: ExtensionMessage) {
 }
 
 async function sendToTab(tabId: number, message: ExtensionMessage) {
-  return browser.tabs.sendMessage(tabId, message);
+  try {
+    return await browser.tabs.sendMessage(tabId, message);
+  } catch {
+    await injectContentScript(tabId);
+    return browser.tabs.sendMessage(tabId, message);
+  }
+}
+
+async function injectContentScript(tabId: number) {
+  await browser.scripting.executeScript({
+    target: { tabId },
+    files: ['/content-scripts/content.js'],
+  });
 }
 

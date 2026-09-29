@@ -93,7 +93,7 @@ export const DEFAULT_COLUMN_MAP: ColumnMap[] = [
   { field: 'platformFields', header: 'Other Platform Fields' },
 ];
 
-const PLATFORM_DEFAULTS_VERSION = 2;
+const PLATFORM_DEFAULTS_VERSION = 3;
 
 export function defaultConfig(): AppConfig {
   return {
@@ -127,8 +127,12 @@ export async function getConfig(): Promise<AppConfig> {
     spreadsheetId: pickFilled(localValue?.spreadsheetId, syncValue?.spreadsheetId),
     sheetName: pickFilled(localValue?.sheetName, syncValue?.sheetName) || 'Leads',
   };
-  const merged = mergeEnabledPlatforms(value);
-  if (merged.defaultsVersion !== (value.defaultsVersion ?? 1)) {
+  const savedVersion = localValue?.defaultsVersion ?? syncValue?.defaultsVersion ?? 0;
+  const merged = mergeEnabledPlatforms(value.enabledPlatforms, savedVersion);
+  if (
+    merged.defaultsVersion !== savedVersion ||
+    merged.enabledPlatforms.join(',') !== (value.enabledPlatforms ?? []).join(',')
+  ) {
     void saveConfig({ ...value, ...merged, columnMap: mergeColumnMap(value.columnMap) }).catch(
       () => undefined,
     );
@@ -140,18 +144,24 @@ export async function getConfig(): Promise<AppConfig> {
   };
 }
 
-function mergeEnabledPlatforms(value: AppConfig): {
+function mergeEnabledPlatforms(
+  enabledPlatforms: string[] | undefined,
+  savedVersion: number,
+): {
   enabledPlatforms: string[];
   defaultsVersion: number;
 } {
-  const enabled = value.enabledPlatforms?.length
-    ? [...value.enabledPlatforms]
+  const enabled = enabledPlatforms?.length
+    ? [...enabledPlatforms]
     : defaultConfig().enabledPlatforms;
-  const version = value.defaultsVersion ?? 1;
-  if (version >= PLATFORM_DEFAULTS_VERSION) {
-    return { enabledPlatforms: enabled, defaultsVersion: version };
+  if (savedVersion >= PLATFORM_DEFAULTS_VERSION) {
+    return { enabledPlatforms: enabled, defaultsVersion: savedVersion };
   }
-  if (!enabled.includes('wellfound')) enabled.push('wellfound');
+  for (const adapter of allAdapters()) {
+    if (adapter.enabledByDefault && !enabled.includes(adapter.id)) {
+      enabled.push(adapter.id);
+    }
+  }
   return { enabledPlatforms: enabled, defaultsVersion: PLATFORM_DEFAULTS_VERSION };
 }
 
