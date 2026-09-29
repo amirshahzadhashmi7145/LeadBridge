@@ -12,6 +12,7 @@ export interface AppConfig {
   googleClientId: string;
   enabledPlatforms: string[];
   columnMap: ColumnMap[];
+  defaultsVersion?: number;
 }
 
 export interface GoogleUser {
@@ -82,12 +83,17 @@ export const DEFAULT_COLUMN_MAP: ColumnMap[] = [
   { field: 'jobsPosted', header: 'Jobs Posted' },
   { field: 'totalHires', header: 'Total Hires' },
   { field: 'totalSpent', header: 'Total Spent' },
+  { field: 'equity', header: 'Equity' },
+  { field: 'visaSponsorship', header: 'Visa Sponsorship' },
+  { field: 'funding', header: 'Funding' },
   { field: 'clientHistory', header: 'Client History' },
   { field: 'authorHeadline', header: 'Author Headline' },
   { field: 'postTimestamp', header: 'Post Date' },
   { field: 'postLinks', header: 'Post Links' },
   { field: 'platformFields', header: 'Other Platform Fields' },
 ];
+
+const PLATFORM_DEFAULTS_VERSION = 2;
 
 export function defaultConfig(): AppConfig {
   return {
@@ -98,6 +104,7 @@ export function defaultConfig(): AppConfig {
       .filter((adapter) => adapter.enabledByDefault)
       .map((adapter) => adapter.id),
     columnMap: DEFAULT_COLUMN_MAP.map((item) => ({ ...item })),
+    defaultsVersion: PLATFORM_DEFAULTS_VERSION,
   };
 }
 
@@ -120,13 +127,32 @@ export async function getConfig(): Promise<AppConfig> {
     spreadsheetId: pickFilled(localValue?.spreadsheetId, syncValue?.spreadsheetId),
     sheetName: pickFilled(localValue?.sheetName, syncValue?.sheetName) || 'Leads',
   };
+  const merged = mergeEnabledPlatforms(value);
+  if (merged.defaultsVersion !== (value.defaultsVersion ?? 1)) {
+    void saveConfig({ ...value, ...merged, columnMap: mergeColumnMap(value.columnMap) }).catch(
+      () => undefined,
+    );
+  }
   return {
     ...value,
-    enabledPlatforms: value.enabledPlatforms?.length
-      ? value.enabledPlatforms
-      : defaultConfig().enabledPlatforms,
+    ...merged,
     columnMap: mergeColumnMap(value.columnMap),
   };
+}
+
+function mergeEnabledPlatforms(value: AppConfig): {
+  enabledPlatforms: string[];
+  defaultsVersion: number;
+} {
+  const enabled = value.enabledPlatforms?.length
+    ? [...value.enabledPlatforms]
+    : defaultConfig().enabledPlatforms;
+  const version = value.defaultsVersion ?? 1;
+  if (version >= PLATFORM_DEFAULTS_VERSION) {
+    return { enabledPlatforms: enabled, defaultsVersion: version };
+  }
+  if (!enabled.includes('wellfound')) enabled.push('wellfound');
+  return { enabledPlatforms: enabled, defaultsVersion: PLATFORM_DEFAULTS_VERSION };
 }
 
 export function mergeColumnMap(saved?: ColumnMap[]): ColumnMap[] {

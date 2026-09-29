@@ -1,32 +1,56 @@
 import { ExtractionBuilder, identityFromLead } from '@/platforms/builder';
-import type { PlatformAdapter } from '@/platforms/types';
-import { firstText, metaContent } from '@/platforms/dom';
+import type { ExtractContext, PlatformAdapter } from '@/platforms/types';
+import type { PageType } from '@/schema/lead';
+import { extractWellfoundCompany, wellfoundCompanySlug } from './company';
+import { extractWellfoundJob, wellfoundJobId } from './jobs';
+
+function pageType(url: URL): PageType {
+  const path = url.pathname;
+  if (/\/jobs\/\d+/.test(path) || /^\/jobs\/?$/.test(path)) return 'job';
+  if (url.searchParams.get('job_listing_slug') || url.searchParams.get('jobId')) return 'job';
+  if (/\/company\/[^/]+/.test(path)) return 'company';
+  return 'unsupported';
+}
 
 export const wellfoundAdapter: PlatformAdapter = {
   id: 'wellfound',
   sourceName: 'Wellfound',
-  enabledByDefault: false,
+  enabledByDefault: true,
   match(url) {
     return /(^|\.)wellfound\.com$/i.test(url.hostname) || /(^|\.)angel\.co$/i.test(url.hostname);
   },
   detectPageType(ctx) {
-    return ctx.url.pathname.includes('/jobs') || ctx.url.pathname.includes('/job')
-      ? 'job'
-      : 'unsupported';
+    return pageType(ctx.url);
   },
-  async extract(ctx) {
-    const type = this.detectPageType(ctx);
+  async extract(ctx: ExtractContext) {
+    const type = pageType(ctx.url);
     const builder = new ExtractionBuilder('wellfound', 'Wellfound', type, ctx.url.toString());
+    if (type === 'job') {
+      await extractWellfoundJob(builder, ctx);
+      const result = builder.result('job');
+      if (!ctx.selectedPostId && (result.candidates?.length ?? 0) > 1 && !builder.has('jobTitle')) {
+        return { needsSelection: true, result };
+      }
+      return result;
+    }
+    if (type === 'company') {
+      extractWellfoundCompany(builder, ctx);
+      return builder.result('company');
+    }
     builder
-      .setType(type === 'job' ? 'job' : 'page')
-      .set('jobTitle', firstText(ctx.document, ['h1']) || metaContent(ctx.document, ['og:title']))
-      .set('jobDescription', metaContent(ctx.document, ['og:description']))
-      .set('company', firstText(ctx.document, ['h2', '[class*="company"]']))
+      .set('leadName', ctx.document.title.replace(/\s*[•|].*$/, ''))
       .set('sourceUrl', ctx.url.toString())
-      .set('jobUrl', ctx.url.toString())
       .set('platformLeadId', ctx.url.pathname)
-      .warn('Wellfound is a starter adapter. Add page-specific selectors when you enable it for production use.');
+      .warn('Open a Wellfound job or company page to capture details.');
     return builder.result(type);
   },
-  getLeadIdentity: identityFromLead,
+  getLeadIdentity(lead) {
+    const identity = identityFromLead(lead);
+    if (!identity.platformLeadId) {
+      identity.platformLeadId =
+        wellfoundJobId(lead.jobUrl || lead.sourceUrl) ||
+        wellfoundCompanySlug(lead.companyUrl || lead.sourceUrl);
+    }
+    return identity;
+  },
 };

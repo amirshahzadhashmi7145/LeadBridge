@@ -1,4 +1,4 @@
-import { firstDatetime, firstEl, firstHref, firstText, metaContent } from '@/platforms/dom';
+import { firstAttr, firstDatetime, firstEl, firstHref, firstText, metaContent } from '@/platforms/dom';
 import { ExtractionBuilder } from '@/platforms/builder';
 import { cleanText, flattenLines, uniqueJoin } from '@/utils/text';
 import { pathOf } from '@/utils/url';
@@ -9,6 +9,7 @@ const CARD_SELECTORS = [
   '[data-ev-sublocation="jobdetails"]',
   '[slidername="job-details"]',
   '.air3-slider-body',
+  '.fe-job-details',
 ];
 
 const TITLE_SELECTORS = [
@@ -17,10 +18,12 @@ const TITLE_SELECTORS = [
   '.job-details-card h4 span.flex-1',
   '.job-details-content h4 span.flex-1',
   '[data-ev-sublocation="jobdetails"] h4 span.flex-1',
-  'h4',
+  '.fe-job-details h3.h5',
+  'h3.h5',
   '.job-details-card h4',
   '.job-details-content h4',
   '[data-ev-sublocation="jobdetails"] h4',
+  'h4',
   '[data-test="job-title"]',
   '[data-cy="job-title"]',
   'h1.air3-title',
@@ -64,6 +67,8 @@ const PANE_SELECTORS = [
   '[data-test="JobPosting"]',
   '[data-ev-label="job_details"]',
   '[data-ev-sublocation="job_details"]',
+  '.fe-job-details',
+  '.fe-job-apply',
   '[class*="apply-page"]',
   '[class*="ApplyPage"]',
   'aside',
@@ -119,18 +124,20 @@ export async function extractUpworkJob(
     .set('jobUrl', jobUrl)
     .set('sourceUrl', url.toString())
     .set('platformLeadId', jobId || jobUrl)
-    .set('budget', jobBudget(text))
+    .set('budget', jobBudget(pane, text))
     .set('location', client.location || clientLocation(pane, text))
-    .extra('pricingType', 'Hourly / fixed-price', pricingType(text))
-    .extra('experienceLevel', 'Experience level', experienceLevel(text))
-    .extra('duration', 'Project duration', projectDuration(text))
+    .extra('pricingType', 'Hourly / fixed-price', pricingType(pane, text))
+    .extra('experienceLevel', 'Experience level', experienceLevel(pane, text))
+    .extra('duration', 'Project duration', projectDuration(pane, text))
     .extra('category', 'Job category', jobCategory(pane, text))
     .extra('proposals', 'Proposals', proposals(text))
-    .extra('postedDate', 'Job posting date', firstDatetime(pane) || postedDate(text))
+    .extra('postedDate', 'Job posting date', jobPostedAt(pane, text))
     .extra('clientRating', 'Client rating', client.rating)
     .extra('jobsPosted', 'Total jobs posted', client.jobsPosted)
     .extra('totalHires', 'Total hires', client.hires)
     .extra('totalSpent', 'Total amount spent', client.spent)
+    .extra('companyIndustry', 'Industry', client.industry)
+    .extra('companySize', 'Company size', client.size)
     .extra('clientHistory', 'Client history', client.history)
     .extra('clientProfile', 'Client profile', client.profile);
 
@@ -183,7 +190,7 @@ function cleanJobTitle(value: string | null | undefined): string {
 function isJunkTitle(value: string): boolean {
   const title = value.trim();
   if (title.length > 120 || title.split(/\s+/).length > 14) return true;
-  return /^(upwork|job details|submit a proposal|find work|best matches|proposal|apply|footer|footer navigation|navigation|open job in a new window|go back|apply now|save job)$/i.test(
+  return   /^(upwork|job details|submit a proposal|find work|best matches|proposal|apply|footer|footer navigation|navigation|open job in a new window|go back|apply now|save job|skills and expertise)$/i.test(
     title,
   ) || /boosted proposals|upgrade your membership|first place winners|footer navigation|available connects/i.test(
     title,
@@ -254,32 +261,82 @@ function visibleText(root: ParentNode): string {
   return cleanText(raw);
 }
 
-function jobBudget(text: string): string {
-  const hourly = text.match(/\$[\d,.]+(?:\s*-\s*\$[\d,.]+)?\s*\/\s*hr/i);
-  if (hourly) return cleanText(hourly[0]);
-  const labeled = text.match(/(?:budget|fixed[- ]price)[:\s]*(\$[\d,.]+(?:\s*-\s*\$[\d,.]+)?)/i);
-  if (labeled?.[1]) return cleanText(labeled[1]);
-  const money = text.match(/\$[\d,.]+(?:[kKmM])?(?:\s*-\s*\$[\d,.]+(?:[kKmM])?)?/);
-  if (money && !/spent|earned|hour/i.test(money[0])) return cleanText(money[0]);
-  return '';
+function featureLi(root: ParentNode, selector: string): HTMLElement | null {
+  const el = root.querySelector(selector);
+  return el?.closest('li') ?? null;
 }
 
-function experienceLevel(text: string): string {
-  if (/\bentry\s*level\b/i.test(text)) return 'Entry level';
-  if (/\bintermediate\b/i.test(text)) return 'Intermediate';
-  if (/\bexpert\b/i.test(text)) return 'Expert';
-  return '';
-}
-
-function projectDuration(text: string): string {
-  const months = text.match(/(\d+\s*(?:to|-)\s*\d+\s+months?)\s*duration/i);
-  if (months?.[1]) return cleanText(months[1]);
-  const labeled = text.match(
-    /(?:^|\n)\s*duration[:\s]*([^\n]+)|est(?:imated)?\.?\s*time[:\s]*([^\n]+)|project\s+(?:length|duration)[:\s]*([^\n]+)/i,
+function featureLabel(li: Element | null): string {
+  if (!li) return '';
+  return (
+    firstText(li, ['.d-none.d-lg-inline']) ||
+    firstText(li, ['.d-lg-none']) ||
+    firstText(li, ['strong'])
   );
-  const value = cleanText(labeled?.[1] || labeled?.[2] || labeled?.[3] || '');
-  if (value && !/intermediate|expert|entry|hourly|hrs?\/week/i.test(value)) return value;
+}
+
+function jobBudget(root: ParentNode, text: string): string {
+  const row = featureLi(root, '[data-cy="clock-timelog"]') || featureLi(root, '[data-cy="fixed-price"]');
+  const featureText = row ? visibleText(row) : '';
+  const fromFeature = moneyRange(featureText);
+  if (fromFeature) return formatBudget(fromFeature, featureText);
+
+  const hourlyRange = text.match(
+    /\$[\d,.]+(?:\.\d{2})?\s*-\s*\$[\d,.]+(?:\.\d{2})?(?:\s*(?:hourly|\/\s*hr))?/i,
+  );
+  if (hourlyRange?.[0] && !/avg|bid range|high \$|low \$/i.test(hourlyRange[0])) {
+    return formatBudget(moneyRange(hourlyRange[0]) || cleanText(hourlyRange[0]), hourlyRange[0]);
+  }
+
+  const labeled = text.match(/(?:budget|fixed[- ]price|est\.?\s*budget)[:\s]*(\$[\d,.]+(?:\s*-\s*\$[\d,.]+)?)/i);
+  if (labeled?.[1]) return cleanText(labeled[1]);
   return '';
+}
+
+function moneyRange(text: string): string {
+  if (!text) return '';
+  const range = text.match(/\$[\d,.]+(?:\.\d{2})?\s*-\s*\$[\d,.]+(?:\.\d{2})?/);
+  if (range?.[0]) return cleanText(range[0].replace(/\s+/g, ''));
+  const single = text.match(/\$[\d,.]+(?:\.\d{2})?(?:\s*\/\s*hr)?/i);
+  if (!single?.[0] || /spent|earned|connects/i.test(text)) return '';
+  return cleanText(single[0]);
+}
+
+function formatBudget(amount: string, context: string): string {
+  if (/\/\s*hr/i.test(amount)) return amount.replace(/\s+/g, '');
+  if (/hourly/i.test(context)) return `${amount} /hr`;
+  return amount;
+}
+
+function experienceLevel(root: ParentNode, text: string): string {
+  const li = featureLi(root, '[data-cy="expertise"]');
+  const fromRow = (li ? firstText(li, ['strong']) : '') || text;
+  if (/\bentry\s*level\b/i.test(fromRow) || /^entry\b/i.test(fromRow)) return 'Entry level';
+  if (/\bintermediate\b/i.test(fromRow)) return 'Intermediate';
+  if (/\bexpert\b/i.test(fromRow)) return 'Expert';
+  return '';
+}
+
+function projectDuration(root: ParentNode, text: string): string {
+  const li = featureLi(root, '[data-cy*="duration"]');
+  const cleaned = cleanDuration(featureLabel(li));
+  if (cleaned) return cleaned;
+  const labeled = text.match(
+    /((?:less than|more than)\s+\d+\s+months?|\d+\+\s+months?|\d+\s*(?:to|-)\s*\d+\s+months?|< 1 month)\s*duration/i,
+  );
+  return cleanDuration(labeled?.[1] || '');
+}
+
+function cleanDuration(value: string): string {
+  const duration = cleanText(value)
+    .replace(/< 1 month/i, 'Less than 1 month')
+    .replace(/\b6\+\s*months?\b/i, 'More than 6 months')
+    .replace(/(\d+)\s*-\s*(\d+)\s+months?/i, '$1 to $2 months');
+  if (!duration || /hourly|hrs?\/week|intermediate|expert|entry|experience|willing to pay/i.test(duration)) {
+    return '';
+  }
+  if (!/month/i.test(duration)) return '';
+  return duration.replace(/\s+/g, ' ');
 }
 
 function jobCategory(root: ParentNode, text: string): string {
@@ -288,7 +345,13 @@ function jobCategory(root: ParentNode, text: string): string {
     '[data-test="JobCategory"]',
     'a[href*="category"]',
   ]);
-  if (labeled && !/proposal|hour|fixed|upwork/i.test(labeled)) return labeled;
+  if (labeled && !/proposal|hour|fixed|upwork|project type/i.test(labeled)) return labeled;
+  const projectType =
+    firstText(root, ['.segmentations li']) ||
+    text.match(/project type:\s*([^\n]+)/i)?.[1] ||
+    '';
+  const typeValue = cleanText(projectType.replace(/^project type:\s*/i, ''));
+  if (typeValue && !/proposal|hour|fixed|upwork/i.test(typeValue)) return typeValue;
   const match = text.match(/(?:category|specialization)[:\s]*([^\n]+)/i);
   const value = cleanText(match?.[1] || '');
   if (!value || /proposal|hour|fixed|intermediate|expert/i.test(value)) return '';
@@ -297,17 +360,54 @@ function jobCategory(root: ParentNode, text: string): string {
 
 function proposals(text: string): string {
   const match = text.match(
-    /proposals?[:\s]*((?:less than\s+)?\d[\d,]*(?:\s+to\s+\d[\d,]*)?)/i,
+    /proposals?[:\s]*((?:less than\s+)?\d[\d,]*\+?(?:\s+to\s+\d[\d,]*)?)/i,
   );
   return cleanText(match?.[1] || '');
+}
+
+function jobPostedAt(root: ParentNode, text: string): string {
+  return (
+    firstText(root, ['[itemprop="datePosted"]']) ||
+    firstDatetime(root) ||
+    postedDate(text)
+  );
 }
 
 function postedDate(text: string): string {
   return cleanText(
     text.match(
-      /posted\s+((?:just now|yesterday|\d+\s+(?:minute|hour|day|week|month|year)s?\s+ago))/i,
+      /posted\s+((?:just now|yesterday|(?:an?|\d+)\s+(?:minute|hour|day|week|month|year)s?\s+ago|(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{1,2},?\s+\d{4}))/i,
     )?.[1] || '',
   );
+}
+
+function clientRating(root: ParentNode, text: string): string {
+  const labeled = unsmash(
+    firstText(root, [
+      '[data-test="rating-minimal"] .air3-rating-minimal-text',
+      '[data-test="rating-minimal"]',
+      '.air3-rating-minimal-text',
+      '.cfe-ui-job-about-client .rating',
+      '[data-qa="client-rating"]',
+      '[data-test="client-rating"]',
+      '[data-qa="client-feedback"]',
+    ]) ||
+      firstAttr(root, ['[aria-label*="rating"]', '[aria-label*="reviews"]'], 'aria-label'),
+  );
+  return parseRating(labeled) || parseRating(text);
+}
+
+function parseRating(text: string): string {
+  if (!text) return '';
+  const full = text.match(
+    /\b([0-5](?:\.\d{1,2})?)\s*(?:\/\s*5)?\s*(?:out\s+of\s+5)?\s*(?:of|from)\s+(\d[\d,]*)\s+reviews?\b/i,
+  );
+  if (full?.[1] && full[2] != null) return `${full[1]} of ${full[2]} reviews`;
+  const stacked = text.match(/\b([0-5](?:\.\d{1,2})?)\b[\s\S]{0,40}?\b(\d[\d,]*)\s+reviews?\b/i);
+  if (stacked?.[1] && stacked[2] != null && !/hire rate/i.test(text.slice(0, 80))) {
+    return `${stacked[1]} of ${stacked[2]} reviews`;
+  }
+  return '';
 }
 
 function aboutClient(root: ParentNode, text: string) {
@@ -318,16 +418,26 @@ function aboutClient(root: ParentNode, text: string) {
     '[data-qa="client-info"]',
     '[data-test="about-client"]',
   ]);
+  const scope = box ?? root;
   const section = box ? visibleText(box) : aboutClientWindow(text);
-  const jobs = labeledValue(section, /jobs?\s+posted/i, /(\d[\d,]*)/);
-  const hires = labeledValue(section, /^(total\s+)?hires?:?$/i, /(\d[\d,]*)/);
-  const spent = labeledValue(section, /(?:total\s+)?spent/i, /(\$[\d,.]+[kKmM+]*)/);
-  const rating = labeledValue(section, /^(client\s+)?rating|stars?$/i, /([1-5]\.\d)/);
-  const postingStats = firstText(box ?? root, ['[data-qa="client-job-posting-stats"]']);
+  const postingStats = tidyClientPhrase(unsmash(firstText(scope, ['[data-qa="client-job-posting-stats"]'])));
+  const hiresText = tidyClientPhrase(unsmash(firstText(scope, ['[data-qa="client-hires"]'])));
+  const hours = tidyClientPhrase(unsmash(firstText(scope, ['[data-qa="client-hours"]'])));
+  const spentRaw =
+    firstText(scope, ['[data-qa="client-spend"]', '[data-qa="client-spent"]']) ||
+    labeledValue(section, /(?:total\s+)?spent/i, /(\$[\d,.]+\s*[kKmM+]*)/);
+  const spent = (spentRaw.match(/\$[\d,.]+\s*[kKmM+]*/i)?.[0] || '').replace(/\s+/g, '');
+  const rating = clientRating(scope, section);
+  const jobs =
+    postingStats.match(/(\d[\d,]*)\s+jobs?\s+posted/i)?.[1] ||
+    labeledValue(section, /jobs?\s+posted/i, /(\d[\d,]*)/);
+  const hires = hiresText.match(/(\d[\d,]*)\s+hires?/i)?.[1] || '';
   const since =
-    firstText(box ?? root, ['[data-qa="client-contract-date"]']) ||
+    firstText(scope, ['[data-qa="client-contract-date"]']) ||
     cleanText(section.match(/member since[^\n]+/i)?.[0] || '');
-  const location = clientLocation(box ?? root, section || text);
+  const location = clientLocation(scope, section || text);
+  const industry = firstText(scope, ['[data-qa="client-company-profile-industry"]']);
+  const size = firstText(scope, ['[data-qa="client-company-profile-size"]']);
   const verified = [
     /payment verified/i.test(section) ? 'Payment verified' : '',
     /phone number verified/i.test(section) ? 'Phone number verified' : '',
@@ -339,14 +449,22 @@ function aboutClient(root: ParentNode, text: string) {
     hires,
     spent,
     rating,
+    industry,
+    size,
     history: uniqueJoin([
-      jobs ? `${jobs} jobs posted` : '',
-      hires ? `${hires} hires` : '',
-      spent,
       postingStats,
+      hiresText,
+      hours,
+      spent ? `${spent} total spent` : '',
+      jobs && !/jobs?\s+posted/i.test(postingStats) ? `${jobs} jobs posted` : '',
+      industry,
+      size,
       since,
     ]),
-    profile: uniqueJoin([...verified, postingStats, since]).slice(0, 240),
+    profile: uniqueJoin([...verified, postingStats, hiresText, hours, spent, industry, size, since]).slice(
+      0,
+      280,
+    ),
   };
 }
 
@@ -380,15 +498,122 @@ function labeledValue(text: string, label: RegExp, value: RegExp): string {
 const COUNTRIES =
   /\b(Nigeria|United States|United Kingdom|India|Canada|Pakistan|Germany|France|Australia|Kenya|Ghana|Egypt|Philippines|Indonesia|Brazil|Mexico|Ukraine|Poland|Spain|Italy|Netherlands|Sweden|Ireland|Singapore|Bangladesh|South Africa)\b/i;
 
+const ISO_COUNTRIES: Record<string, string> = {
+  IND: 'India',
+  USA: 'United States',
+  GBR: 'United Kingdom',
+  CAN: 'Canada',
+  PAK: 'Pakistan',
+  NGA: 'Nigeria',
+  AUS: 'Australia',
+  DEU: 'Germany',
+  FRA: 'France',
+  KEN: 'Kenya',
+  GHA: 'Ghana',
+  EGY: 'Egypt',
+  PHL: 'Philippines',
+  IDN: 'Indonesia',
+  BRA: 'Brazil',
+  MEX: 'Mexico',
+  UKR: 'Ukraine',
+  POL: 'Poland',
+  ESP: 'Spain',
+  ITA: 'Italy',
+  NLD: 'Netherlands',
+  SWE: 'Sweden',
+  IRL: 'Ireland',
+  SGP: 'Singapore',
+  BGD: 'Bangladesh',
+  ZAF: 'South Africa',
+  ARE: 'United Arab Emirates',
+  SAU: 'Saudi Arabia',
+  ROU: 'Romania',
+  BEL: 'Belgium',
+  NZL: 'New Zealand',
+  CHE: 'Switzerland',
+  AUT: 'Austria',
+  DNK: 'Denmark',
+  NOR: 'Norway',
+  FIN: 'Finland',
+  PRT: 'Portugal',
+  CZE: 'Czechia',
+  HUN: 'Hungary',
+  GRC: 'Greece',
+  ISR: 'Israel',
+  QAT: 'Qatar',
+  KWT: 'Kuwait',
+  LKA: 'Sri Lanka',
+  NPL: 'Nepal',
+  VNM: 'Vietnam',
+  THA: 'Thailand',
+  MYS: 'Malaysia',
+  JPN: 'Japan',
+  KOR: 'South Korea',
+  TUR: 'Turkey',
+  ARG: 'Argentina',
+  COL: 'Colombia',
+  CHL: 'Chile',
+  PER: 'Peru',
+  MAR: 'Morocco',
+};
+
+function expandCountry(value: string): string {
+  const trimmed = cleanText(value);
+  return ISO_COUNTRIES[trimmed.toUpperCase()] || trimmed;
+}
+
+function unsmash(value: string): string {
+  return cleanText(
+    value
+      .replace(/([a-z])(\d)/gi, '$1 $2')
+      .replace(/(\d)([A-Za-z])/g, '$1 $2')
+      .replace(/%(?=\S)/g, '% '),
+  );
+}
+
+function tidyClientPhrase(value: string): string {
+  return cleanText(
+    value
+      .replace(/\b1 hours\b/i, '1 hour')
+      .replace(/\bposted\s+(\d[\d.]*%\s+hire rate)/i, 'posted, $1'),
+  );
+}
+
 function clientLocation(root: ParentNode, text: string): string {
-  const countryOnly = firstText(root, ['[data-qa="client-location"] strong']);
-  if (countryOnly) return stripClock(countryOnly);
+  const loc = firstEl(root, ['[data-qa="client-location"]', '[data-test="client-location"]']);
+  if (loc) {
+    const country = expandCountry(firstText(loc, ['strong']) || '');
+    const city = [...loc.querySelectorAll('.nowrap, span')]
+      .map((el) => stripClock(el.textContent || ''))
+      .find(
+        (line) =>
+          line &&
+          line !== country &&
+          line.toUpperCase() !== country.toUpperCase() &&
+          !ISO_COUNTRIES[line.toUpperCase()] &&
+          line.length > 1 &&
+          line.length < 40 &&
+          !/posted|hire|spent|verified|member|proposal|payment|phone/i.test(line),
+      );
+    if (city && country) return `${city}, ${country}`;
+    if (country) return country;
+  }
   const labeled = firstText(root, [
     '[data-test="client-location"]',
     '[data-qa="client-location"]',
     '[data-test="AboutClient"] [data-test="location"]',
   ]);
-  if (labeled) return stripClock(labeled);
+  if (labeled) {
+    const stripped = stripClock(labeled);
+    const iso = stripped.match(/\b([A-Z]{3})\b/);
+    const country = iso?.[1] ? expandCountry(iso[1]) : expandCountry(stripped);
+    const city = stripped
+      .replace(/\b[A-Z]{3}\b/, '')
+      .replace(country, '')
+      .trim();
+    if (city && country && city.toLowerCase() !== country.toLowerCase()) return `${city}, ${country}`;
+    return country;
+  }
 
   const lines = text
     .split('\n')
@@ -396,16 +621,21 @@ function clientLocation(root: ParentNode, text: string): string {
     .filter(Boolean);
   const about = lines.findIndex((line) => /about the client/i.test(line));
   const window = about >= 0 ? lines.slice(about, about + 15) : lines;
-  const country = window.find((line) => COUNTRIES.test(line) && line.length < 40) || '';
+  const country =
+    window.find((line) => COUNTRIES.test(line) && line.length < 40) ||
+    window.find((line) => Boolean(ISO_COUNTRIES[line.toUpperCase()])) ||
+    '';
+  const expanded = expandCountry(country);
   const city = window.find(
     (line) =>
-      Boolean(country) &&
+      Boolean(expanded) &&
       line !== country &&
+      line !== expanded &&
       /^[A-Z][A-Za-z .'-]{2,40}$/.test(line) &&
       !/posted|hire|spent|verified|member|proposal|payment|phone|email|about|client/i.test(line),
   );
-  if (city && country) return `${city}, ${country}`;
-  return country;
+  if (city && expanded) return `${city}, ${expanded}`;
+  return expanded;
 }
 
 function stripClock(value: string): string {
@@ -416,9 +646,9 @@ function stripClock(value: string): string {
   );
 }
 
-function pricingType(text: string): string {
-  if (/hourly rate|\/\s*hr/i.test(text)) return 'Hourly';
-  if (/fixed[- ]price/i.test(text)) return 'Fixed-price';
-  if (/hourly/i.test(text)) return 'Hourly';
+function pricingType(root: ParentNode, text: string): string {
+  if (featureLi(root, '[data-cy="fixed-price"]') || /fixed[- ]price/i.test(text)) return 'Fixed-price';
+  const hourlyRow = featureLi(root, '[data-cy="clock-hourly"]') || featureLi(root, '[data-cy="clock-timelog"]');
+  if (hourlyRow || /hourly rate|\/\s*hr|\bhourly\b/i.test(text)) return 'Hourly';
   return '';
 }

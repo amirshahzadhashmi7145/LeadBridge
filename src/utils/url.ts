@@ -22,7 +22,7 @@ export function normalizeUrl(value: string | undefined | null): string {
 
   url.hash = '';
   const keep = new URLSearchParams();
-  for (const key of ['currentJobId', 'n_uid']) {
+  for (const key of ['currentJobId', 'n_uid', 'job_listing_slug']) {
     const found = url.searchParams.get(key);
     if (found) keep.set(key, found);
   }

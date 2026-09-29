@@ -1,10 +1,10 @@
 # LeadBridge
 
-Chrome extension that captures structured lead data from LinkedIn and Upwork into a shared company Google Sheet. Salespeople review and edit extracted fields before saving. They do not copy/paste or switch to Sheets.
+Chrome extension that captures structured lead data from LinkedIn, Upwork, and Wellfound into a shared company Google Sheet. Salespeople review and edit extracted fields before saving. They do not copy/paste or switch to Sheets.
 
 ## What it does
 
-1. Open a LinkedIn job, company page, or feed post, or an Upwork job page.
+1. Open a LinkedIn job, company page, or feed post; an Upwork job page; or a Wellfound job or company page.
 2. Click the LeadBridge icon. The side panel opens.
 3. The extension detects the platform, extracts visible page data (not a screenshot), and shows a review form.
 4. Edit anything that looks wrong, then click **Save / Capture**.
@@ -74,7 +74,7 @@ Platforms live in `src/platforms/`. Each adapter implements:
 - `extract(ctx)`
 - `getLeadIdentity(lead)`
 
-Register it in `src/platforms/registry.ts`. Wellfound and We Work Remotely already have starter adapters (off by default).
+Register it in `src/platforms/registry.ts`. We Work Remotely still has a starter adapter (off by default).
 
 ## Project layout
 

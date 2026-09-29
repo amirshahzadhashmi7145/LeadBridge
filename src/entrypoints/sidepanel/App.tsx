@@ -146,7 +146,7 @@ export default function App() {
       setFields(result.fields);
       setPage((current) =>
         current
-          ? { ...current, status: 'needs_selection', candidates: result.candidates, message: 'Multiple posts are visible. Choose one.' }
+          ? { ...current, status: 'needs_selection', candidates: result.candidates, message: 'Multiple jobs are visible. Choose one.' }
           : current,
       );
       void sendMessage({ type: 'HIGHLIGHT_POSTS' });
@@ -326,8 +326,8 @@ export default function App() {
 
         {page && page.status === 'needs_selection' ? (
           <div className="card">
-            <h2>Multiple posts are visible</h2>
-            <p className="muted">Click the post you want to capture. That is the only extra step.</p>
+            <h2>Multiple items are visible</h2>
+            <p className="muted">Click the one you want to capture. That is the only extra step.</p>
             {candidates.map((candidate, index) => (
               <button
                 key={candidate.id || index}

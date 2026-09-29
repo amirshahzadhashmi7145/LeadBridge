@@ -5,6 +5,10 @@ import {
   postCandidates,
   postIdFromEl,
 } from '@/platforms/linkedin/posts';
+import {
+  findWellfoundJobById,
+  findWellfoundJobCards,
+} from '@/platforms/wellfound/jobs';
 import { getConfig } from '@/storage/config';
 import { logger } from '@/utils/logger';
 import type { ExtractResponse } from '@/schema/lead';
@@ -101,7 +105,7 @@ async function extract(selectedPostId?: string): Promise<ExtractResponse> {
       ok: false,
       reason: 'unknown_platform',
       message:
-        "LeadBridge doesn't recognize this website yet. Supported platforms: LinkedIn and Upwork.",
+        "LeadBridge doesn't recognize this website yet. Supported platforms: LinkedIn, Upwork, and Wellfound.",
       url: location.href,
     };
   }
@@ -181,6 +185,17 @@ function ensureStyles() {
 function highlightAll() {
   ensureStyles();
   clearHighlights();
+  const wellfoundCards = findWellfoundJobCards(document);
+  if (wellfoundCards.length) {
+    wellfoundCards.forEach((el, index) => {
+      el.setAttribute(HIGHLIGHT_ATTR, 'candidate');
+      const badge = document.createElement('div');
+      badge.className = 'lb-capture-badge';
+      badge.textContent = `Capture ${index + 1}`;
+      el.appendChild(badge);
+    });
+    return;
+  }
   const posts = findPostElements(document).filter((el) => {
     const rect = el.getBoundingClientRect();
     return rect.height > 80 && rect.bottom > 0 && rect.top < window.innerHeight;
@@ -202,7 +217,7 @@ function highlightOne(postId: string) {
   document.querySelectorAll(`[${HIGHLIGHT_ATTR}]`).forEach((el) => {
     el.setAttribute(HIGHLIGHT_ATTR, 'candidate');
   });
-  const el = findPostById(document, postId);
+  const el = findWellfoundJobById(document, postId) || findPostById(document, postId);
   if (el) {
     el.setAttribute(HIGHLIGHT_ATTR, 'active');
     el.scrollIntoView({ block: 'center', behavior: 'smooth' });
