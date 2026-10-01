@@ -195,7 +195,7 @@ export async function saveConfig(config: AppConfig): Promise<AppConfig> {
 
 export function setupProblems(config: AppConfig): string | null {
   if (!config.spreadsheetId.trim()) {
-    return 'This build is missing the team spreadsheet ID.';
+    return 'This build is not connected to a Google sheet. Copy .env.example to .env, add your spreadsheet ID, and rebuild.';
   }
   return null;
 }

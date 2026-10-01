@@ -33,7 +33,7 @@ interface WebhookBody {
 
 export function setupWebhookProblems(): string | null {
   if (!COMPANY_GOOGLE_WEB_APP_URL.trim()) {
-    return 'This build is missing the team Google script URL.';
+    return 'This build is not connected to a Google sheet. Copy .env.example to .env, add your own Apps Script /exec URL, and rebuild.';
   }
   return null;
 }

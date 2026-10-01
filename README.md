@@ -34,35 +34,28 @@ For a production zip:
 npm run zip
 ```
 
-## Google Sheets setup
+## Connect your own Google Sheet
 
-1. Create or open the shared company spreadsheet.
-2. Copy the spreadsheet ID from the URL: `https://docs.google.com/spreadsheets/d/<SPREADSHEET_ID>/edit`
-3. Give every salesperson edit access to that sheet.
-4. In the extension, open **Settings** and paste the spreadsheet ID. Default tab name is `Leads`.
-5. The first save creates the header row if the tab is empty.
+Team sheet credentials are **not** in this repo. A public clone cannot write to someone else's spreadsheet.
 
-Default columns include source, job/company fields, original URL, status (`Lead captured` by default), captured-by, and timestamps. Existing workflow values stay in the Status column:
+1. Copy `.env.example` to `.env`.
+2. Create a Google Sheet and copy its ID from  
+   `https://docs.google.com/spreadsheets/d/<SPREADSHEET_ID>/edit`
+3. Paste `apps-script/Code.gs` into a new Apps Script project. Replace `YOUR_SPREADSHEET_ID`. Run **authorize** once and click Allow.
+4. Deploy as a web app: **Execute as Me**, **Who has access: Anyone**. Copy the `/exec` URL.
+5. Put that URL and spreadsheet ID in `.env`:
 
-Lead captured, Message sent, Application submitted, Proposal sent, Client replied, Follow-up required, Follow-up completed, Converted, Rejected/Closed.
+```
+WXT_GOOGLE_WEB_APP_URL=https://script.google.com/macros/s/.../exec
+WXT_SPREADSHEET_ID=your-spreadsheet-id
+WXT_SHEET_NAME=LeadBridge
+```
 
-## Google OAuth
+6. Rebuild (`npm run build` or `npm run dev`) and reload the unpacked extension.
 
-LeadBridge uses the signed-in user's Google account. It never stores Google or platform passwords.
+Without a filled-in `.env`, Save is blocked. Do not commit `.env`.
 
-`Error 400: redirect_uri_mismatch` means the OAuth client is the wrong type, or the redirect URL is missing.
-
-Use a **Web application** client (recommended for unpacked installs):
-
-1. [Google Cloud Credentials](https://console.cloud.google.com/apis/credentials) → enable **Google Sheets API**.
-2. Create OAuth client → type **Web application** (not Chrome extension, not Desktop).
-3. Authorized redirect URIs — add both, then Save:
-   - `https://nmcgiafjblnaeklmecclldpbcaahnign.chromiumapp.org/`
-   - `https://nmcgiafjblnaeklmecclldpbcaahnign.chromiumapp.org`
-4. Copy the Client ID into LeadBridge **Settings** → OAuth client ID → Save settings.
-5. Sign in again.
-
-If Chrome still shows a different extension ID on `chrome://extensions`, use the redirect URL printed in Settings instead. After changing the manifest `key`, remove the old unpacked install and load it again.
+Default columns include source, job/company fields, original URL, status (`Lead captured` by default), captured-by, and timestamps.
 
 ## Adding a platform later
 

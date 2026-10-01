@@ -1,7 +1,11 @@
 /**
- * Paste this entire file into the Google Apps Script project that owns the
- * web app URL, then Deploy → Manage deployments → edit → New version.
- * Execute as: Me. Who has access: Anyone. Keep the same /exec URL.
+ * Paste this entire file into YOUR Google Apps Script project, then
+ * Deploy → Manage deployments → New deployment (or New version).
+ * Execute as: Me. Who has access: Anyone.
+ *
+ * Replace YOUR_SPREADSHEET_ID with the ID from your spreadsheet URL:
+ * https://docs.google.com/spreadsheets/d/<ID>/edit
+ * Do not use another team's spreadsheet ID.
  */
 const SPREADSHEET_ID = 'YOUR_SPREADSHEET_ID';
 const SHEET_NAME = 'LeadBridge';
