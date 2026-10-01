@@ -1,6 +1,7 @@
 import type { ExtractResponse, Lead, LeadIdentity, PostCandidate } from '@/schema/lead';
 import type { AppConfig, GoogleUser, PendingDraft } from '@/storage/config';
 import type { DuplicateMatch, SaveResult } from '@/sheets/types';
+import type { SaveJobRecord } from '@/storage/saves';
 import type { LogEntry } from '@/utils/logger';
 
 export type PageStatus =
@@ -32,6 +33,18 @@ export type ExtensionMessage =
   | { type: 'HIGHLIGHT_POST'; postId: string }
   | { type: 'CLEAR_HIGHLIGHTS' }
   | { type: 'SAVE_LEAD'; lead: Lead; action: 'create' | 'update' | 'force-create'; existingRow?: number }
+  | {
+      type: 'SAVE_RESULT';
+      jobId: string;
+      title: string;
+      sourceUrl?: string;
+      ok: boolean;
+      save?: SaveResult;
+      error?: string;
+      keepDraft?: boolean;
+      queuedOffline?: boolean;
+      duplicate?: DuplicateMatch;
+    }
   | { type: 'CHECK_DUPLICATE'; identity: LeadIdentity; lead: Lead }
   | { type: 'GET_CONFIG' }
   | { type: 'SAVE_CONFIG'; config: AppConfig }
@@ -40,6 +53,7 @@ export type ExtensionMessage =
   | { type: 'GET_SESSION' }
   | { type: 'GET_LOGS' }
   | { type: 'CLEAR_LOGS' }
+  | { type: 'GET_SAVE_JOBS' }
   | { type: 'GET_DRAFTS' }
   | { type: 'RETRY_DRAFT'; draftId: string }
   | { type: 'DISCARD_DRAFT'; draftId: string }
@@ -47,7 +61,8 @@ export type ExtensionMessage =
   | { type: 'CONTENT_DETECT' }
   | { type: 'CONTENT_HIGHLIGHT_POSTS' }
   | { type: 'CONTENT_HIGHLIGHT_POST'; postId: string }
-  | { type: 'CONTENT_CLEAR_HIGHLIGHTS' };
+  | { type: 'CONTENT_CLEAR_HIGHLIGHTS' }
+  | { type: 'CONTENT_TOAST'; jobId: string; tone: 'saving' | 'success' | 'error' | 'queued'; title: string; detail?: string };
 
 export type ExtensionResponse =
   | { ok: true; page?: PageState; extraction?: ExtractResponse }
@@ -55,6 +70,8 @@ export type ExtensionResponse =
   | { ok: true; user: GoogleUser | null }
   | { ok: true; logs: LogEntry[] }
   | { ok: true; drafts: PendingDraft[] }
+  | { ok: true; jobs: SaveJobRecord[] }
+  | { ok: true; queued: true; jobId: string }
   | { ok: true; save: SaveResult }
   | { ok: true; duplicate: DuplicateMatch | null }
   | { ok: false; error: string; keepDraft?: boolean; duplicate?: DuplicateMatch };

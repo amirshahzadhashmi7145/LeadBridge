@@ -12,7 +12,7 @@ import {
 } from '@/schema/lead';
 import { absoluteDateValue } from '@/utils/date';
 import { flattenLines, hashId } from '@/utils/text';
-import { normalizeUrl } from '@/utils/url';
+import { extractPlatformKey, normalizeUrl } from '@/utils/url';
 
 export class ExtractionBuilder {
   private lead: Lead = {
@@ -171,11 +171,18 @@ export class ExtractionBuilder {
 }
 
 export function identityFromLead(lead: Lead): LeadIdentity {
+  const jobUrl = normalizeUrl(lead.jobUrl);
+  const sourceUrl = normalizeUrl(lead.sourceUrl);
   return {
-    platformLeadId: lead.platformLeadId,
-    jobUrl: normalizeUrl(lead.jobUrl),
+    platformLeadId:
+      lead.platformLeadId ||
+      extractPlatformKey(lead.jobUrl) ||
+      extractPlatformKey(lead.sourceUrl) ||
+      extractPlatformKey(lead.profileUrl) ||
+      '',
+    jobUrl,
     profileUrl: normalizeUrl(lead.profileUrl),
     postId: lead.platformFields.postId ?? '',
-    sourceUrl: normalizeUrl(lead.sourceUrl),
+    sourceUrl,
   };
 }

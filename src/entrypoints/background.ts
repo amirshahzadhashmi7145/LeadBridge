@@ -1,21 +1,31 @@
 import { currentUser, signIn, signOut } from '@/auth/google';
 import type { ExtensionMessage, PageState } from '@/messaging/types';
 import { findAdapter } from '@/platforms/registry';
-import { parseSpreadsheetId } from '@/sheets/ids';
-import { DuplicateError, SameUserDuplicateError, checkDuplicate, saveLead } from '@/sheets/save';
+import { identityFromLead } from '@/platforms/builder';
+import { DuplicateError, OfflineQueuedError, SameUserDuplicateError, checkDuplicate, saveLead } from '@/sheets/save';
+import { identityKeys } from '@/sheets/duplicates';
+import { COMPANY_SHEET_NAME, COMPANY_SPREADSHEET_ID } from '@/config/company';
 import {
   getConfig,
   getDrafts,
   removeDraft,
   saveConfig,
+  saveDraft,
   type AppConfig,
+  type PendingDraft,
 } from '@/storage/config';
 import { logger } from '@/utils/logger';
+import { isNetworkError, isOnline } from '@/utils/network';
 import type { ExtractResponse } from '@/schema/lead';
+import { listSaveJobs, trackSaveJob } from '@/storage/saves';
+import type { DuplicateMatch, SaveResult } from '@/sheets/types';
 
 const PANEL_PATH = '/sidepanel.html';
+const FLUSH_ALARM = 'leadbridge.flush-outbox';
 let ownerTabId: number | null = null;
 let ignoreDisconnectUntil = 0;
+let flushingOutbox = false;
+const savingLocks = new Set<string>();
 
 export default defineBackground(() => {
   void browser.sidePanel.setPanelBehavior({ openPanelOnActionClick: false }).catch(() => {
@@ -67,6 +77,23 @@ export default defineBackground(() => {
       });
     return true;
   });
+
+  void browser.alarms.create(FLUSH_ALARM, { periodInMinutes: 1 }).catch(() => undefined);
+  browser.alarms.onAlarm.addListener((alarm) => {
+    if (alarm.name === FLUSH_ALARM) void flushOutbox();
+  });
+  browser.runtime.onStartup.addListener(() => {
+    void flushOutbox();
+  });
+  browser.runtime.onInstalled.addListener(() => {
+    void browser.storage.local.remove(['leadbridge.knownLeads', 'leadbridge.knownLeads.v2']);
+    void flushOutbox();
+  });
+  globalThis.addEventListener?.('online', () => {
+    void flushOutbox();
+  });
+  void browser.storage.local.remove(['leadbridge.knownLeads', 'leadbridge.knownLeads.v2']);
+  void flushOutbox();
 });
 
 async function syncPanelForTab(tabId: number) {
@@ -127,7 +154,11 @@ async function handle(message: ExtensionMessage, sender: { tab?: { id?: number }
       await sendToActiveTab({ type: 'CONTENT_CLEAR_HIGHLIGHTS' });
       return { ok: true };
     case 'SAVE_LEAD':
-      return saveMessage(message.lead, message.action, message.existingRow);
+      return queueSave(message.lead, message.action, message.existingRow, ownerTabId);
+    case 'GET_SAVE_JOBS':
+      return { ok: true, jobs: await listSaveJobs() };
+    case 'SAVE_RESULT':
+      return { ok: true };
     case 'CHECK_DUPLICATE':
       return { ok: true, duplicate: await checkDuplicate(message.lead) };
     case 'GET_CONFIG':
@@ -162,9 +193,9 @@ async function handle(message: ExtensionMessage, sender: { tab?: { id?: number }
 function sanitizeConfig(config: AppConfig): AppConfig {
   return {
     ...config,
-    spreadsheetId: parseSpreadsheetId(config.spreadsheetId),
-    sheetName: config.sheetName.trim() || 'Leads',
-    googleClientId: config.googleClientId.trim(),
+    spreadsheetId: COMPANY_SPREADSHEET_ID,
+    sheetName: COMPANY_SHEET_NAME,
+    googleClientId: '',
   };
 }
 
@@ -272,6 +303,144 @@ async function extractFromActiveTab(selectedPostId?: string): Promise<ExtractRes
   }
 }
 
+function queueSave(
+  lead: Parameters<typeof saveLead>[0],
+  action: Parameters<typeof saveLead>[1],
+  existingRow?: number,
+  tabId?: number | null,
+) {
+  const lock = saveLock(lead);
+  if (savingLocks.has(lock)) {
+    return { ok: true as const, queued: true as const, jobId: 'in-flight' };
+  }
+  savingLocks.add(lock);
+  const jobId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  const title = lead.jobTitle || lead.leadName || lead.company || 'Lead';
+  const sourceUrl = lead.sourceUrl || lead.jobUrl || '';
+  void keepAliveWhile(
+    (async () => {
+      try {
+        const toastTab = tabId ?? (await activeTab())?.id;
+        await trackSaveJob({
+          jobId,
+          title,
+          sourceUrl,
+          status: 'saving',
+          detail: 'Writing to Google Sheets',
+          at: Date.now(),
+        });
+        await showPageToast(toastTab, {
+          jobId,
+          tone: 'saving',
+          title: 'Saving…',
+          detail: title,
+        });
+        const result = await saveMessage(lead, action, existingRow);
+        await finishSaveJob(jobId, title, sourceUrl, toastTab, result);
+      } finally {
+        savingLocks.delete(lock);
+      }
+    })(),
+  );
+  return { ok: true as const, queued: true as const, jobId };
+}
+
+function saveLock(lead: Parameters<typeof saveLead>[0]): string {
+  const keys = identityKeys(identityFromLead(lead));
+  return keys.sort().join('|') || lead.jobUrl || lead.sourceUrl || lead.leadId;
+}
+
+async function finishSaveJob(
+  jobId: string,
+  title: string,
+  sourceUrl: string,
+  tabId: number | undefined,
+  result: {
+    ok: boolean;
+    save?: SaveResult;
+    error?: string;
+    keepDraft?: boolean;
+    queuedOffline?: boolean;
+    duplicate?: DuplicateMatch;
+  },
+) {
+  let status: 'saving' | 'success' | 'error' | 'duplicate' | 'queued' = 'error';
+  let detail = result.error || 'Could not save this lead.';
+  let toastTitle = 'Save failed';
+  let tone: 'saving' | 'success' | 'error' | 'queued' = 'error';
+  if (result.ok && result.save) {
+    status = 'success';
+    tone = 'success';
+    toastTitle = result.save.action === 'updated' ? 'Lead updated' : 'Lead saved';
+    detail = result.save.action === 'updated'
+      ? result.save.rowNumber
+        ? `Updated row ${result.save.rowNumber}`
+        : 'Lead updated in Google Sheets'
+      : result.save.rowNumber
+        ? `Saved as row ${result.save.rowNumber}`
+        : 'Saved to Google Sheets';
+  } else if (result.duplicate) {
+    status = 'duplicate';
+    toastTitle = 'Already in the sheet';
+    detail = result.error || 'This lead already exists.';
+    tone = 'error';
+  } else if (result.queuedOffline) {
+    status = 'queued';
+    tone = 'queued';
+    toastTitle = 'Saved on this device';
+    detail = result.error || 'Will upload when you are back online.';
+  } else if (result.keepDraft) {
+    detail = `${result.error || 'Could not save.'} Kept as a local draft.`;
+  }
+
+  await trackSaveJob({ jobId, title, sourceUrl, status, detail, at: Date.now() });
+  await showPageToast(tabId, {
+    jobId,
+    tone,
+    title: toastTitle,
+    detail: `${title} · ${detail}`,
+  });
+  await browser.runtime
+    .sendMessage({
+      type: 'SAVE_RESULT',
+      jobId,
+      title,
+      sourceUrl,
+      ok: result.ok,
+      save: result.save,
+      error: result.error,
+      keepDraft: result.keepDraft,
+      queuedOffline: result.queuedOffline,
+      duplicate: result.duplicate,
+    })
+    .catch(() => undefined);
+}
+
+function keepAliveWhile(task: Promise<unknown>) {
+  const timer = setInterval(() => {
+    void browser.runtime.getPlatformInfo().catch(() => undefined);
+  }, 8000);
+  return task.finally(() => clearInterval(timer));
+}
+
+async function showPageToast(
+  tabId: number | undefined,
+  toast: { jobId: string; tone: 'saving' | 'success' | 'error' | 'queued'; title: string; detail?: string },
+) {
+  const ids = new Set<number>();
+  if (tabId) ids.add(tabId);
+  const active = await activeTab();
+  if (active?.id) ids.add(active.id);
+  for (const id of ids) {
+    try {
+      await sendToTab(id, { type: 'CONTENT_TOAST', ...toast });
+      return;
+    } catch {
+      // Try the next tab.
+    }
+  }
+}
+
 async function saveMessage(
   lead: Parameters<typeof saveLead>[0],
   action: Parameters<typeof saveLead>[1],
@@ -295,6 +464,14 @@ async function saveMessage(
         duplicate: error.match,
       };
     }
+    if (error instanceof OfflineQueuedError) {
+      return {
+        ok: false,
+        error: error.message,
+        keepDraft: true,
+        queuedOffline: true,
+      };
+    }
     return {
       ok: false,
       error: error instanceof Error ? error.message : 'Could not save this lead.',
@@ -307,9 +484,47 @@ async function retryDraft(draftId: string) {
   const drafts = await getDrafts();
   const draft = drafts.find((item) => item.id === draftId);
   if (!draft) return { ok: false, error: 'That draft is no longer available.' };
-  const result = await saveMessage(draft.lead, 'create');
-  if (result.ok) await removeDraft(draftId);
+  const result = await saveMessage(draft.lead, draft.action ?? 'create', draft.existingRow);
+  if (result.ok || result.duplicate) await removeDraft(draftId);
   return result;
+}
+
+async function flushOutbox() {
+  if (flushingOutbox || !isOnline()) return;
+  const drafts = (await getDrafts()).filter((draft) => shouldAutoRetry(draft));
+  if (!drafts.length) return;
+  flushingOutbox = true;
+  await keepAliveWhile(
+    (async () => {
+      try {
+        for (const draft of drafts) {
+          if (!isOnline()) break;
+          const result = await saveMessage(draft.lead, draft.action ?? 'create', draft.existingRow);
+          if (result.ok || result.duplicate) {
+            await removeDraft(draft.id);
+            continue;
+          }
+          if (result.queuedOffline || isNetworkError(result.error)) {
+            break;
+          }
+          await saveDraft({
+            ...draft,
+            autoRetry: false,
+            reason: result.error || draft.reason,
+            lastAttemptAt: Date.now(),
+          });
+        }
+      } finally {
+        flushingOutbox = false;
+      }
+    })(),
+  );
+}
+
+function shouldAutoRetry(draft: PendingDraft): boolean {
+  if (draft.autoRetry === false) return false;
+  const reason = draft.reason || '';
+  return /you're offline|network is back/i.test(reason) || isNetworkError(reason);
 }
 
 async function activeTab() {

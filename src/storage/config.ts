@@ -1,5 +1,6 @@
 import { allAdapters } from '@/platforms/registry';
 import { COMMON_LEAD_FIELDS, type CommonLeadField, type Lead } from '@/schema/lead';
+import { COMPANY_SHEET_NAME, COMPANY_SPREADSHEET_ID } from '@/config/company';
 
 export interface ColumnMap {
   field: string;
@@ -32,6 +33,12 @@ export interface PendingDraft {
   savedAt: string;
   reason: string;
   lead: Lead;
+  action?: 'create' | 'update' | 'force-create';
+  existingRow?: number;
+  identityKeys?: string[];
+  autoRetry?: boolean;
+  attempts?: number;
+  lastAttemptAt?: number;
 }
 
 export const DEFAULT_COLUMN_MAP: ColumnMap[] = [
@@ -97,8 +104,8 @@ const PLATFORM_DEFAULTS_VERSION = 3;
 
 export function defaultConfig(): AppConfig {
   return {
-    spreadsheetId: '',
-    sheetName: 'Leads',
+    spreadsheetId: COMPANY_SPREADSHEET_ID,
+    sheetName: COMPANY_SHEET_NAME,
     googleClientId: '',
     enabledPlatforms: allAdapters()
       .filter((adapter) => adapter.enabledByDefault)
@@ -123,9 +130,9 @@ export async function getConfig(): Promise<AppConfig> {
     ...defaultConfig(),
     ...syncValue,
     ...localValue,
-    googleClientId: pickFilled(localValue?.googleClientId, syncValue?.googleClientId),
-    spreadsheetId: pickFilled(localValue?.spreadsheetId, syncValue?.spreadsheetId),
-    sheetName: pickFilled(localValue?.sheetName, syncValue?.sheetName) || 'Leads',
+    googleClientId: '',
+    spreadsheetId: COMPANY_SPREADSHEET_ID,
+    sheetName: COMPANY_SHEET_NAME,
   };
   const savedVersion = localValue?.defaultsVersion ?? syncValue?.defaultsVersion ?? 0;
   const merged = mergeEnabledPlatforms(value.enabledPlatforms, savedVersion);
@@ -187,17 +194,10 @@ export async function saveConfig(config: AppConfig): Promise<AppConfig> {
 }
 
 export function setupProblems(config: AppConfig): string | null {
-  if (!config.googleClientId.trim()) {
-    return 'Open Settings, paste your Google OAuth Client ID, click Save settings, then sign in.';
-  }
   if (!config.spreadsheetId.trim()) {
-    return 'Open Settings and paste the Google Sheet ID before saving a lead.';
+    return 'This build is missing the team spreadsheet ID.';
   }
   return null;
-}
-
-function pickFilled(...values: Array<string | undefined>): string {
-  return values.find((value) => value?.trim())?.trim() ?? '';
 }
 
 export async function getSession(): Promise<StoredSession | null> {
@@ -237,8 +237,21 @@ export async function getDrafts(): Promise<PendingDraft[]> {
 
 export async function saveDraft(draft: PendingDraft): Promise<void> {
   const drafts = await getDrafts();
-  drafts.unshift(draft);
-  await browser.storage.local.set({ [DRAFTS_KEY]: drafts.slice(0, 50) });
+  const rest = drafts.filter((item) => !sameOutboxItem(item, draft));
+  await browser.storage.local.set({ [DRAFTS_KEY]: [draft, ...rest].slice(0, 50) });
+}
+
+function sameOutboxItem(left: PendingDraft, right: PendingDraft): boolean {
+  if (left.id === right.id) return true;
+  const leftKeys = new Set((left.identityKeys ?? []).map((key) => key.toLowerCase()));
+  const rightKeys = (right.identityKeys ?? []).map((key) => key.toLowerCase());
+  if (leftKeys.size && rightKeys.some((key) => leftKeys.has(key))) return true;
+  const leftId = left.lead.leadId?.trim();
+  const rightId = right.lead.leadId?.trim();
+  if (leftId && rightId && leftId === rightId) return true;
+  const leftUrl = (left.lead.jobUrl || left.lead.sourceUrl).trim();
+  const rightUrl = (right.lead.jobUrl || right.lead.sourceUrl).trim();
+  return Boolean(leftUrl && rightUrl && leftUrl === rightUrl);
 }
 
 export async function removeDraft(id: string): Promise<void> {

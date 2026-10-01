@@ -9,7 +9,9 @@ import {
   type Lead,
 } from '@/schema/lead';
 import type { DuplicateMatch } from '@/sheets/types';
-import type { AppConfig, GoogleUser } from '@/storage/config';
+import type { SaveJobRecord } from '@/storage/saves';
+import type { ExtensionMessage } from '@/messaging/types';
+import type { GoogleUser } from '@/storage/config';
 import { DuplicateDialog } from '@/ui/DuplicateDialog';
 import { FieldRow } from '@/ui/FieldRow';
 import { StatusBanner } from '@/ui/StatusBanner';
@@ -24,29 +26,18 @@ export default function App() {
   const [lead, setLead] = useState<Lead | null>(null);
   const [status, setStatus] = useState<Lead['status']>('Lead captured');
   const [user, setUser] = useState<GoogleUser | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [extracting, setExtracting] = useState(false);
   const [banner, setBanner] = useState<Banner>(null);
   const [duplicate, setDuplicate] = useState<DuplicateMatch | null>(null);
-  const [setupWarning, setSetupWarning] = useState('');
 
   const load = useCallback(async () => {
-    setBusy(true);
-    setBanner(null);
+    setExtracting(true);
     setDuplicate(null);
     try {
       const session = await sendMessage<{ ok: true; user: GoogleUser | null }>({
         type: 'GET_SESSION',
       });
       setUser(session.user);
-      const cfg = await sendMessage<{ ok: true; config: AppConfig }>({ type: 'GET_CONFIG' });
-      const missing: string[] = [];
-      if (!cfg.config.googleClientId.trim()) missing.push('OAuth Client ID');
-      if (!cfg.config.spreadsheetId.trim()) missing.push('Google Sheet ID');
-      setSetupWarning(
-        missing.length
-          ? `Settings still need: ${missing.join(' and ')}. Open Settings, save them, then sign in.`
-          : '',
-      );
       const state = await sendMessage<{ ok: true; page: PageState }>({ type: 'GET_PAGE_STATE' });
       setPage(state.page);
       if (state.page.status !== 'ready') {
@@ -71,11 +62,57 @@ export default function App() {
         text: error instanceof Error ? error.message : 'Could not read this page.',
       });
     } finally {
-      setBusy(false);
+      setExtracting(false);
+      await restoreSaveBanner(setBanner);
     }
   }, []);
 
   const lastKey = useRef('');
+
+  useEffect(() => {
+    const onResult = (message: ExtensionMessage) => {
+      if (message.type !== 'SAVE_RESULT') return;
+      if (message.ok) {
+        setDuplicate(null);
+        setBanner({
+          tone: 'success',
+          text: message.save?.rowNumber
+            ? `${message.save.action === 'updated' ? 'Updated' : 'Saved'} row ${message.save.rowNumber}.`
+            : 'Saved to Google Sheets.',
+        });
+        void sendMessage({ type: 'CLEAR_HIGHLIGHTS' });
+        return;
+      }
+      if (message.duplicate) {
+        setDuplicate(message.duplicate);
+        setBanner({ tone: 'info', text: 'This lead already exists.' });
+        return;
+      }
+      if (message.queuedOffline) {
+        setBanner({
+          tone: 'info',
+          text: message.error || "You're offline. Saved on this device — will upload when the network is back.",
+        });
+        return;
+      }
+      setBanner({
+        tone: 'error',
+        text: message.keepDraft
+          ? `${message.error || 'Could not save.'} Kept as a local draft.`
+          : message.error || 'Could not save this lead.',
+      });
+    };
+    browser.runtime.onMessage.addListener(onResult);
+    return () => browser.runtime.onMessage.removeListener(onResult);
+  }, []);
+
+  useEffect(() => {
+    if (banner?.text !== 'Saving to Google Sheets…') return;
+    const timer = window.setInterval(() => {
+      void restoreSaveBanner(setBanner);
+    }, 800);
+    return () => window.clearInterval(timer);
+  }, [banner?.text]);
 
   useEffect(() => {
     const pageKey = (url: string) => {
@@ -182,7 +219,7 @@ export default function App() {
   }
 
   async function selectPost(postId: string) {
-    setBusy(true);
+    setExtracting(true);
     try {
       await sendMessage({ type: 'HIGHLIGHT_POST', postId });
       const extracted = await sendMessage<{ ok: true; extraction: ExtractionResult }>({
@@ -192,7 +229,7 @@ export default function App() {
       applyExtraction(extracted.extraction);
       setPage((current) => (current ? { ...current, status: 'ready' } : current));
     } finally {
-      setBusy(false);
+      setExtracting(false);
     }
   }
 
@@ -227,67 +264,45 @@ export default function App() {
   const commonFields = useMemo(() => fields.filter((field) => !field.platformSpecific), [fields]);
   const extraFields = useMemo(() => fields.filter((field) => field.platformSpecific), [fields]);
 
-  async function signIn() {
-    setBusy(true);
-    try {
-      const response = await sendMessage<{ ok: boolean; user?: GoogleUser; error?: string }>({
-        type: 'GOOGLE_SIGN_IN',
-      });
-      if (!response.ok || !response.user) {
-        setBanner({ tone: 'error', text: response.error || 'Google sign-in failed.' });
-        return;
-      }
-      setUser(response.user);
-      setBanner({ tone: 'success', text: `Signed in as ${response.user.name}` });
-    } catch (error) {
-      setBanner({ tone: 'error', text: error instanceof Error ? error.message : 'Google sign-in failed.' });
-    } finally {
-      setBusy(false);
-    }
-  }
-
   async function persist(action: 'create' | 'update' | 'force-create', existingRow?: number) {
     if (!lead) return;
-    setBusy(true);
+    const payload: Lead = {
+      ...lead,
+      status,
+      notes: lead.notes,
+      platformFields: { ...lead.platformFields },
+    };
+    setBanner({ tone: 'info', text: 'Saving to Google Sheets…' });
     setDuplicate(null);
     try {
-      const payload: Lead = { ...lead, status, notes: lead.notes };
       const response = await sendMessage<{
         ok: boolean;
-        save?: { action: string; rowNumber: number };
-        error?: string;
-        keepDraft?: boolean;
+        queued?: boolean;
+        jobId?: string;
         duplicate?: DuplicateMatch;
+        error?: string;
       }>({
         type: 'SAVE_LEAD',
         lead: payload,
         action,
         existingRow,
       });
-      if (!response.ok) {
+      if (!response.ok && !response.queued) {
         if (response.duplicate) {
           setDuplicate(response.duplicate);
-          setBanner({ tone: 'error', text: response.error || 'This lead already exists.' });
-          return;
+          setBanner({ tone: 'info', text: 'This lead already exists.' });
+        } else {
+          setBanner({
+            tone: 'error',
+            text: response.error || 'Could not save this lead.',
+          });
         }
-        setBanner({
-          tone: 'error',
-          text: response.keepDraft
-            ? `${response.error} Your lead was saved as a local draft so it is not lost.`
-            : response.error || 'Save failed.',
-        });
-        return;
       }
-      await sendMessage({ type: 'CLEAR_HIGHLIGHTS' });
+    } catch (error) {
       setBanner({
-        tone: 'success',
-        text:
-          response.save?.action === 'updated'
-            ? `Lead updated in Google Sheets (row ${response.save.rowNumber}).`
-            : `Lead captured in Google Sheets (row ${response.save?.rowNumber ?? ''}).`,
+        tone: 'error',
+        text: error instanceof Error ? error.message : 'Could not save this lead.',
       });
-    } finally {
-      setBusy(false);
     }
   }
 
@@ -307,10 +322,9 @@ export default function App() {
       </header>
 
       <main className="page">
-        {setupWarning ? <StatusBanner tone="warn">{setupWarning}</StatusBanner> : null}
         {banner ? <StatusBanner tone={banner.tone}>{banner.text}</StatusBanner> : null}
 
-        {!page || (busy && !lead) ? (
+        {!page || (extracting && !lead) ? (
           <div className="card muted">Waiting for the page to finish loading…</div>
         ) : null}
 
@@ -401,20 +415,15 @@ export default function App() {
       </main>
 
       <div className="actions">
-        {!user ? (
-          <button className="secondary" disabled={busy} onClick={() => void signIn()}>
-            Sign in with Google
-          </button>
-        ) : null}
-        <button className="secondary" disabled={busy} onClick={() => void load()}>
-          Re-extract this page
+        <button className="secondary" disabled={extracting} onClick={() => void load()}>
+          {extracting ? 'Extracting…' : 'Re-extract this page'}
         </button>
         <button
           className="primary"
-          disabled={busy || !lead || page?.status !== 'ready'}
+          disabled={!lead || page?.status !== 'ready'}
           onClick={() => void persist('create')}
         >
-          {busy ? 'Working…' : 'Save / Capture'}
+          Save / Capture
         </button>
         <button className="ghost" onClick={() => void browser.runtime.openOptionsPage()}>
           Open settings
@@ -422,13 +431,37 @@ export default function App() {
       </div>
 
       {duplicate ? (
-        <DuplicateDialog
-          match={duplicate}
-          onCancel={() => setDuplicate(null)}
-          onUpdate={() => void persist('update', duplicate.rowNumber)}
-          onCreate={() => void persist('force-create')}
-        />
+        <DuplicateDialog match={duplicate} onCancel={() => setDuplicate(null)} />
       ) : null}
     </div>
   );
+}
+
+async function restoreSaveBanner(setBanner: (banner: Banner) => void) {
+  try {
+    const response = await sendMessage<{ ok: true; jobs: SaveJobRecord[] }>({ type: 'GET_SAVE_JOBS' });
+    const job = response.jobs[0];
+    if (!job || Date.now() - job.at > 3 * 60_000) return;
+    if (job.status === 'saving') {
+      setBanner({ tone: 'info', text: 'Saving to Google Sheets…' });
+      return;
+    }
+    if (job.status === 'success') {
+      setBanner({ tone: 'success', text: job.detail });
+      return;
+    }
+    if (job.status === 'queued') {
+      setBanner({ tone: 'info', text: job.detail });
+      return;
+    }
+    if (job.status === 'duplicate') {
+      setBanner({ tone: 'info', text: 'This lead already exists.' });
+      return;
+    }
+    if (job.status === 'error') {
+      setBanner({ tone: 'error', text: job.detail });
+    }
+  } catch {
+    // Keep the current banner if the background page is waking up.
+  }
 }

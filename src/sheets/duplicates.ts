@@ -1,7 +1,7 @@
 import type { Lead, LeadIdentity } from '@/schema/lead';
 import type { AppConfig } from '@/storage/config';
-import { normalizeUrl } from '@/utils/url';
-import { toAbsoluteDate } from '@/utils/date';
+import { extractPlatformKey } from '@/utils/url';
+import { formatCalendarDate, toAbsoluteDate } from '@/utils/date';
 import type { DuplicateMatch } from './types';
 import { snapshotLeads, type SheetSnapshot } from './client';
 
@@ -31,14 +31,52 @@ export function findDuplicate(
 }
 
 export function identitiesMatch(identity: LeadIdentity, lead: Partial<Lead>): boolean {
-  const keys = [
-    identity.platformLeadId && lead.platformLeadId && same(identity.platformLeadId, lead.platformLeadId),
-    identity.jobUrl && lead.jobUrl && sameUrl(identity.jobUrl, lead.jobUrl),
-    identity.profileUrl && lead.profileUrl && sameUrl(identity.profileUrl, lead.profileUrl),
-    identity.postId && lead.platformFields?.postId && same(identity.postId, lead.platformFields.postId),
-    identity.sourceUrl && lead.sourceUrl && sameUrl(identity.sourceUrl, lead.sourceUrl),
-  ];
-  return keys.some(Boolean);
+  const incoming = identityKeys(identity);
+  const existing = identityKeys({
+    platformLeadId: lead.platformLeadId,
+    jobUrl: lead.jobUrl,
+    profileUrl: lead.profileUrl,
+    postId: lead.platformFields?.postId,
+    sourceUrl: lead.sourceUrl,
+    leadId: lead.leadId,
+  });
+  if (!incoming.length || !existing.length) return false;
+  return incoming.some((key) => existing.includes(key));
+}
+
+export function identityKeys(
+  identity: Partial<LeadIdentity> & { leadId?: string; companyUrl?: string },
+): string[] {
+  const keys = new Set<string>();
+  const add = (value?: string, allowCompanySlug = false) => {
+    const extracted = extractPlatformKey(value).toLowerCase();
+    if (extracted && (allowCompanySlug || !isCompanySlugOnly(value, extracted))) {
+      keys.add(extracted);
+    }
+    const trimmed = (value ?? '').trim().toLowerCase();
+    if (trimmed && isBareId(trimmed)) keys.add(trimmed);
+  };
+  add(identity.platformLeadId, true);
+  add(identity.jobUrl);
+  add(identity.postId, true);
+  add(identity.profileUrl, true);
+  add(identity.sourceUrl);
+  return [...keys];
+}
+
+function isBareId(value: string): boolean {
+  if (value.includes('://') || value.includes('/')) return false;
+  if (value.startsWith('linkedin:')) return false;
+  return /^[~a-z0-9._-]{6,}$/i.test(value);
+}
+
+function isCompanySlugOnly(value: string | undefined, extracted: string): boolean {
+  const raw = value ?? '';
+  const company = raw.match(/linkedin\.com\/company\/([^/?#]+)/i);
+  if (!company?.[1]) return false;
+  const slug = company[1].replace(/\/$/, '').toLowerCase();
+  if (slug !== extracted) return false;
+  return !/[?&]currentJobId=|\/jobs\/view\/|urn:li:activity:/i.test(raw);
 }
 
 export function ownershipMessage(match: DuplicateMatch): string {
@@ -47,21 +85,19 @@ export function ownershipMessage(match: DuplicateMatch): string {
   return `This lead has already been captured by ${match.capturedBy} on ${when}.${source}`;
 }
 
-function same(a: string, b: string): boolean {
-  return a.trim().toLowerCase() === b.trim().toLowerCase();
-}
-
-function sameUrl(a: string, b: string): boolean {
-  return normalizeUrl(a) === normalizeUrl(b);
-}
-
 function emailsEqual(value: string | undefined, email: string): boolean {
   if (!value || !email) return false;
   const lower = email.toLowerCase();
-  return value.toLowerCase() === lower || value.toLowerCase().includes(lower);
+  const hay = value.toLowerCase();
+  const local = lower.split('@')[0] ?? '';
+  return hay === lower || hay.includes(lower) || hay === local || Boolean(local && hay.includes(local));
 }
 
 function formatWhen(value: string): string {
   if (!value) return 'an unknown date';
+  const parsed = Date.parse(value);
+  if (!Number.isNaN(parsed)) {
+    return formatCalendarDate(new Date(parsed)) || value;
+  }
   return toAbsoluteDate(value) || value;
 }

@@ -12,6 +12,7 @@ import {
 import { getConfig } from '@/storage/config';
 import { logger } from '@/utils/logger';
 import type { ExtractResponse } from '@/schema/lead';
+import { showPageToast } from '@/ui/pageToast';
 
 const HIGHLIGHT_ATTR = 'data-lb-highlight';
 const STYLE_ID = 'leadbridge-highlight-style';
@@ -52,7 +53,15 @@ export default defineContentScript({
   },
 });
 
-async function handleMessage(message: { type?: string; selectedPostId?: string; postId?: string }) {
+async function handleMessage(message: {
+  type?: string;
+  selectedPostId?: string;
+  postId?: string;
+  jobId?: string;
+  tone?: 'saving' | 'success' | 'error' | 'queued';
+  title?: string;
+  detail?: string;
+}) {
   switch (message.type) {
     case 'CONTENT_DETECT':
       return detect();
@@ -66,6 +75,16 @@ async function handleMessage(message: { type?: string; selectedPostId?: string; 
       return { ok: true };
     case 'CONTENT_CLEAR_HIGHLIGHTS':
       clearHighlights();
+      return { ok: true };
+    case 'CONTENT_TOAST':
+      if (message.jobId && message.tone && message.title) {
+        showPageToast({
+          jobId: message.jobId,
+          tone: message.tone,
+          title: message.title,
+          detail: message.detail,
+        });
+      }
       return { ok: true };
     default:
       return null;

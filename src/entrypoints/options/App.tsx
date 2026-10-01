@@ -11,19 +11,10 @@ export default function OptionsApp() {
   const [user, setUser] = useState<GoogleUser | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [drafts, setDrafts] = useState<PendingDraft[]>([]);
-  const [redirectUrl, setRedirectUrl] = useState('');
-  const [extensionId, setExtensionId] = useState('');
   const [banner, setBanner] = useState<string>('');
   const [error, setError] = useState('');
 
   useEffect(() => {
-    const chromeApi = (
-      globalThis as typeof globalThis & {
-        chrome?: { identity?: { getRedirectURL?: () => string }; runtime?: { id?: string } };
-      }
-    ).chrome;
-    setRedirectUrl(chromeApi?.identity?.getRedirectURL?.() || browser.identity.getRedirectURL());
-    setExtensionId(browser.runtime.id);
     void reload();
   }, []);
 
@@ -50,30 +41,6 @@ export default function OptionsApp() {
     setBanner('Settings saved.');
   }
 
-  async function signIn() {
-    try {
-      if (config.googleClientId.trim()) {
-        await persist();
-      }
-      const response = await sendMessage<{ ok: boolean; user?: GoogleUser; error?: string }>({
-        type: 'GOOGLE_SIGN_IN',
-      });
-      if (!response.ok || !response.user) {
-        setError(response.error || 'Sign-in failed.');
-        return;
-      }
-      setUser(response.user);
-      setBanner(`Signed in as ${response.user.name} (${response.user.email})`);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Sign-in failed.');
-    }
-  }
-
-  async function copy(value: string) {
-    await navigator.clipboard.writeText(value);
-    setBanner('Copied.');
-  }
-
   return (
     <div className="wrap">
       <header className="header page-header">
@@ -81,7 +48,7 @@ export default function OptionsApp() {
           <img src="/icon-32.png" alt="" />
           LeadBridge settings
         </div>
-        <span className="badge">{user ? user.email : 'Not signed in'}</span>
+        <span className="badge">{user?.email || 'Ready'}</span>
       </header>
 
       {banner ? <StatusBanner tone="success">{banner}</StatusBanner> : null}
@@ -89,96 +56,12 @@ export default function OptionsApp() {
 
       <div className="grid">
         <section className="card">
-          <h2>Google account</h2>
+          <h2>Team sheet</h2>
           <p className="muted">
-            Team members sign in with the company Google account that already has access to the
-            shared lead sheet. LeadBridge never stores Google passwords.
+            Saves go to the shared LeadBridge sheet through the team Google script. Nobody signs in
+            or pastes a sheet ID. Capture from LinkedIn, Upwork, or Wellfound and hit Save.
           </p>
-          <div className="row">
-            <button className="primary" onClick={() => void signIn()}>
-              {user ? 'Switch account' : 'Sign in with Google'}
-            </button>
-            {user ? (
-              <button
-                className="secondary"
-                onClick={async () => {
-                  await sendMessage({ type: 'GOOGLE_SIGN_OUT' });
-                  setUser(null);
-                }}
-              >
-                Sign out
-              </button>
-            ) : null}
-          </div>
-        </section>
-
-        <section className="card">
-          <h2>Destination Google Sheet</h2>
-          <div className="field">
-            <label htmlFor="spreadsheetId">Spreadsheet ID</label>
-            <input
-              id="spreadsheetId"
-              value={config.spreadsheetId}
-              placeholder="Paste the full sheet URL or the ID after /d/"
-              onChange={(event) => setConfig({ ...config, spreadsheetId: event.target.value })}
-            />
-          </div>
-          <div className="field">
-            <label htmlFor="sheetName">Sheet tab (bottom of the spreadsheet)</label>
-            <input
-              id="sheetName"
-              value={config.sheetName}
-              placeholder="Usually Sheet1"
-              onChange={(event) => setConfig({ ...config, sheetName: event.target.value })}
-            />
-            <p className="muted">
-              This is the tab at the bottom of Google Sheets, like <strong>Sheet1</strong>. It is not a
-              column. If you type <strong>LeadBridge</strong> and that tab does not exist, the
-              extension will create it.
-            </p>
-          </div>
-          <div className="field">
-            <label htmlFor="clientId">OAuth client ID (Web application)</label>
-            <input
-              id="clientId"
-              value={config.googleClientId}
-              placeholder="123456789-xxxx.apps.googleusercontent.com"
-              onChange={(event) => setConfig({ ...config, googleClientId: event.target.value })}
-            />
-          </div>
-          <p className="banner warn">
-            Keep only <strong>one</strong> LeadBridge installed. Two copies have two IDs, and Google
-            will block sign-in. This copy&apos;s ID is <code>{extensionId}</code>.
-          </p>
-          <ol className="muted setup-steps">
-            <li>
-              Open the <strong>same</strong> Web application OAuth client you already created.
-            </li>
-            <li>
-              Under <strong>Authorized redirect URIs</strong> add both URLs below, then Save. Wait 1–2
-              minutes.
-            </li>
-          </ol>
-          <div className="copy-row">
-            <code>{redirectUrl || 'Reload the extension to see this URL.'}</code>
-            <button className="secondary" type="button" onClick={() => void copy(redirectUrl)}>
-              Copy
-            </button>
-          </div>
-          <div className="copy-row">
-            <code>{redirectUrl.replace(/\/$/, '')}</code>
-            <button
-              className="secondary"
-              type="button"
-              onClick={() => void copy(redirectUrl.replace(/\/$/, ''))}
-            >
-              Copy
-            </button>
-          </div>
-          <p className="muted">
-            Extension ID: <code>{extensionId}</code>. After saving the client, paste the Client ID
-            above, click <strong>Save settings</strong>, then Sign in.
-          </p>
+          {user ? <p className="muted">Chrome profile: {user.email || user.name}</p> : null}
         </section>
 
         <section className="card">
@@ -243,12 +126,16 @@ export default function OptionsApp() {
             <span className="muted">{drafts.length} stored</span>
           </div>
           {drafts.length === 0 ? (
-            <p className="muted">If Google Sheets is down, failed captures are kept here.</p>
+            <p className="muted">Failed captures wait here and retry automatically when you are back online.</p>
           ) : (
             drafts.map((draft) => (
               <div key={draft.id} className="field">
                 <strong>{draft.lead.jobTitle || draft.lead.leadName || draft.lead.sourceUrl}</strong>
-                <div className="muted">{draft.reason}</div>
+                <div className="muted">
+                  {draft.autoRetry === false
+                    ? draft.reason
+                    : `${draft.reason}${draft.attempts ? ` · tried ${draft.attempts} time${draft.attempts === 1 ? '' : 's'}` : ''}`}
+                </div>
                 <div className="row">
                   <button
                     className="secondary"
