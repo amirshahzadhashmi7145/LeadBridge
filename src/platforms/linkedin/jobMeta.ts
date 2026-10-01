@@ -73,7 +73,9 @@ export function parseJobMetaWindows(
     workplace: header.workplace || lineMatch(lines, /^(Remote|Hybrid|On-?site)$/i),
     employmentType:
       header.employmentType || lineMatch(lines, /^(Full-?time|Part-?time|Contract|Internship)$/i),
-    applicants: header.applicants,
+    applicants:
+      header.applicants ||
+      pick(joined, /((?:over\s+)?\d[\d,]*\+?)\s+applicants/i),
     applicantsPastDay: pick(joined, /(\d[\d,]*)\s+in the past day/i),
     applicantTotal:
       pick(joined, /(\d[\d,]*)\s+total applicants/i) ||
@@ -188,6 +190,13 @@ function parseHeaderLines(lines: string[], title = '') {
       }
       if (!applicants && /clicked apply|applicant/i.test(next)) applicants = next;
     }
+    const companyLoc = line.match(
+      /^(.{2,80}?)\s*[•·|]\s*(.+?\b(?:Area|United|Kingdom|States|Canada|Germany|India|Australia).*)\s*\((Remote|Hybrid|On-?site|On site)\)\s*$/i,
+    );
+    if (companyLoc) {
+      location = location || cleanLocation(companyLoc[2] || '');
+      workplace = workplace || normalizeWorkplace(companyLoc[3] || '');
+    }
     if (!workplace && /^(Remote|Hybrid|On-?site|On site)$/i.test(line)) workplace = normalizeWorkplace(line);
     if (!employmentType && /^(Full-?time|Part-?time|Contract|Internship)$/i.test(line)) {
       employmentType = normalizeEmployment(line);
@@ -252,18 +261,31 @@ export function looksLikeLocation(value: string): boolean {
     return true;
   }
   if (/\b(Greater|Area|Metropolitan|County|Region|District)\b/i.test(cleaned)) return true;
-  return /^[A-Z][a-zA-Z.'-]+(?:[\s-][A-Z][a-zA-Z.'-]+){0,3}$/.test(cleaned) && cleaned.split(/\s+/).length <= 4;
+  const words = cleaned.split(/\s+/);
+  return (
+    words.length >= 2 &&
+    words.length <= 4 &&
+    /^[A-Z][a-zA-Z.'-]+(?:[\s-][A-Z][a-zA-Z.'-]+){1,3}$/.test(cleaned)
+  );
 }
 
 export function locationFromBlob(text: string): string {
   const cleaned = stripWorkplaceSuffix(cleanText(text));
   if (!cleaned) return '';
-  if (looksLikeLocation(cleaned)) return cleaned;
-  for (const part of cleaned.split(/\s*[·•|]\s*/)) {
-    const loc = stripWorkplaceSuffix(part);
-    if (looksLikeLocation(loc)) return loc;
+  const parts = cleaned.split(/\s*[·•|]\s*/).map((part) => stripWorkplaceSuffix(part)).filter(Boolean);
+  if (parts.length > 1) {
+    for (const part of parts) {
+      if (looksLikeLocation(part)) return part;
+    }
   }
+  if (looksLikeLocation(cleaned)) return cleaned;
   return countryOrCity(cleaned);
+}
+
+export function isJobChromeLabel(value: string): boolean {
+  return /^(remote|hybrid|on-?site|on site|full-?time|part-?time|contract|internship|easy apply|save|follow)$/i.test(
+    cleanText(value),
+  );
 }
 
 function stripWorkplaceSuffix(value: string): string {

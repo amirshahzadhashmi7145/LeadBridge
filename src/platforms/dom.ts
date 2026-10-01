@@ -55,7 +55,10 @@ export function firstHref(root: ParentNode, selectors: string[], base: string): 
       const nodes = root.querySelectorAll(selector);
       for (const el of nodes) {
         const href = cleanText(el.getAttribute('href'));
-        if (href && href !== '#') return absoluteUrl(href, base);
+        const label = cleanText(el.textContent || el.getAttribute('aria-label'));
+        if (href && href !== '#' && (!/\/company\//i.test(href) || (label && !/^show more/i.test(label)))) {
+          return absoluteUrl(href, base);
+        }
       }
     } catch {
       // Invalid selector — skip.

@@ -30,20 +30,18 @@ export async function waitForLinkedInJobExtras(doc: Document, jobId: string): Pr
 
 export function jobReadyState(doc: Document, jobId: string) {
   const root = jobRoot(doc);
-  const title = jobId
-    ? doc.querySelector(`a[href*="/jobs/view/${jobId}"]`)
-    : doc.querySelector('a[href*="/jobs/view/"]');
   const about = sectionByName(doc, 'AboutTheJob', jobId);
   const company = sectionByName(doc, 'AboutTheCompany', jobId);
   const applicants = sectionByName(doc, 'PremiumApplicantInsights', jobId);
   const insights = sectionByName(doc, 'PremiumCompanyInsights', jobId);
-  const header = headerText(root, title);
+  const header = headerText(root, null);
+  const titleText = jobTitleFromHeader(root, doc, jobId);
 
   return {
-    hasTitle: Boolean(clean(title?.textContent)),
+    hasTitle: Boolean(titleText),
     hasHeader:
       /\d+\s+(?:minute|hour|day|week|month|year)s?\s+ago/i.test(header) ||
-      /clicked apply/i.test(header) ||
+      /clicked apply|over\s+\d|applicants/i.test(header) ||
       /\b(United States|United Kingdom|Canada|Germany|France|India|Australia|Remote)\b/i.test(header),
     hasAbout: clean(about?.textContent).length > 80,
     hasCompany: /about the company|followers|employees/i.test(clean(company?.textContent)),
@@ -51,6 +49,27 @@ export function jobReadyState(doc: Document, jobId: string) {
       `${clean(applicants?.textContent)} ${clean(insights?.textContent)}`,
     ),
   };
+}
+
+function jobTitleFromHeader(root: Element | null, doc: Document, jobId: string): string {
+  const scope = root ?? doc;
+  for (const paragraph of scope.querySelectorAll('p')) {
+    const text = clean(paragraph.textContent);
+    if (
+      text &&
+      text.length < 120 &&
+      !/^(remote|hybrid|on-?site|on site|full-?time|part-?time|contract|internship|easy apply|save)$/i.test(text) &&
+      !/applicant|promoted by|job poster|followers/i.test(text) &&
+      !/[•·|]/.test(text)
+    ) {
+      return text;
+    }
+  }
+  const title = clean(doc.title).replace(/\s*\|\s*LinkedIn.*$/i, '');
+  const part = title.split(/\s*\|\s*/)[0]?.trim() ?? '';
+  if (part && !/^(remote|hybrid|contract)$/i.test(part)) return part;
+  void jobId;
+  return '';
 }
 
 function jobRoot(doc: Document): Element | null {

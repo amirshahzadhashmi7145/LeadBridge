@@ -11,7 +11,7 @@ import { ExtractionBuilder } from '@/platforms/builder';
 import { cleanText, flattenLines, uniqueJoin } from '@/utils/text';
 import { pathOf, searchParam } from '@/utils/url';
 import { extractEmbeddedJob } from './embedded';
-import { locationFromBlob, parseVisibleJobMeta, type VisibleJobMeta } from './jobMeta';
+import { isJobChromeLabel, locationFromBlob, parseVisibleJobMeta, type VisibleJobMeta } from './jobMeta';
 import { waitForLinkedInJobReady } from './ready';
 import { extractSduiJob } from './sdui';
 
@@ -126,7 +126,7 @@ export async function extractLinkedInJob(
   const split = splitHeading(rawTitle);
   const cardBits = readCardLines(card);
 
-  const title = split.title || cardBits.title || rawTitle;
+  const title = cleanJobTitle(split.title || cardBits.title || rawTitle, sdui.company);
   const company =
     cleanCompanyName(sdui.company) ||
     cleanCompanyName(firstCompanyName(pane, COMPANY_SELECTORS)) ||
@@ -185,13 +185,14 @@ export async function extractLinkedInJob(
     .setType('job')
     .set('jobTitle', title)
     .set('company', company)
-    .set('leadName', company || title)
+    .set('leadName', title || company)
     .set('companyUrl', companyUrl)
     .set('location', location)
     .set('jobDescription', description)
     .set('jobUrl', jobUrl)
     .set('sourceUrl', url.toString())
     .set('platformLeadId', jobId || jobUrl)
+    .set('contact', sdui.poster || '')
     .extra(
       'employmentType',
       'Employment type',
@@ -295,6 +296,15 @@ function expandCollapsed(doc: Document) {
       }
     }
   });
+}
+
+function cleanJobTitle(value: string, company = ''): string {
+  const cleaned = cleanText(value).replace(/\s*\|\s*LinkedIn.*$/i, '');
+  if (!cleaned) return '';
+  if (isJobChromeLabel(cleaned)) return '';
+  if (company && cleaned.toLowerCase() === company.toLowerCase()) return '';
+  if (/applicant|promoted by|actively reviewing|job poster/i.test(cleaned)) return '';
+  return cleaned;
 }
 
 function splitHeading(raw: string): { title: string; company: string } {
@@ -411,7 +421,7 @@ function firstCompanyName(root: ParentNode | null, selectors: string[]): string 
     try {
       for (const el of root.querySelectorAll(selector)) {
         const cleaned = cleanCompanyName(el.textContent || '');
-        if (cleaned) return cleaned;
+        if (cleaned && !/^show more/i.test(cleaned)) return cleaned;
       }
     } catch {
       // Invalid selector — skip.

@@ -1,6 +1,7 @@
 import { firstEl } from '@/platforms/dom';
 import { cleanText } from '@/utils/text';
 import {
+  isJobChromeLabel,
   locationFromBlob,
   parseJobMetaWindows,
   type VisibleJobMeta,
@@ -11,6 +12,7 @@ export interface SduiJob {
   company: string;
   companyUrl: string;
   description: string;
+  poster: string;
   meta: VisibleJobMeta;
 }
 
@@ -23,22 +25,26 @@ export function extractSduiJob(doc: Document, jobId: string): Partial<SduiJob> {
   if (!root && !aboutJob && !aboutCompany) return {};
 
   const scope = root ?? doc;
-  const title = sduiTitle(scope, jobId);
   const companyLink = sduiCompanyLink(scope);
   const company = sduiCompanyName(companyLink);
   const companyUrl = companyLink?.href ?? '';
+  const title = sduiTitle(scope, jobId, company);
 
   const headerText = headerRegion(scope, aboutJob, title);
   const extrasText = [rawText(applicantInsights), rawText(companyInsights), rawText(aboutCompany)]
     .filter(Boolean)
     .join('\n');
   const meta = parseJobMetaWindows(headerText, extrasText, title);
+  const pills = sduiPills(scope, jobId);
+  if (!meta.workplace) meta.workplace = pills.workplace;
+  if (!meta.employmentType) meta.employmentType = pills.employmentType;
   if (!meta.location) meta.location = locationFromHeaderParagraph(scope);
 
   return {
     title,
     company,
     companyUrl,
+    poster: jobPosterName(scope),
     description: rawText(aboutJob).replace(/^about the job\s*/i, ''),
     meta,
   };
@@ -74,18 +80,89 @@ function section(
   return firstEl(scoped, selectors) || firstEl(doc, selectors);
 }
 
-function sduiTitle(root: ParentNode, jobId: string): string {
-  const link = jobId
-    ? root.querySelector(`a[href*="/jobs/view/${jobId}"]`)
-    : root.querySelector('a[href*="/jobs/view/"]');
-  return cleanText(link?.textContent);
+function sduiTitle(root: ParentNode, jobId: string, company = ''): string {
+  for (const paragraph of root.querySelectorAll('p')) {
+    const text = cleanText(paragraph.textContent);
+    if (isJobTitleText(text, company)) return text;
+  }
+  const links = jobId
+    ? root.querySelectorAll(`a[href*="/jobs/view/${jobId}"]`)
+    : root.querySelectorAll('a[href*="/jobs/view/"]');
+  for (const link of links) {
+    const text = cleanText(link.textContent);
+    if (isJobTitleText(text, company)) return text;
+  }
+  return '';
+}
+
+function isJobTitleText(value: string, company = ''): boolean {
+  if (!value || value.length > 120 || value.length < 3) return false;
+  if (company && value.toLowerCase() === company.toLowerCase()) return false;
+  if (isJobChromeLabel(value)) return false;
+  if (/applicant|promoted by|actively reviewing|job poster|followers|employees/i.test(value)) {
+    return false;
+  }
+  if (/^meet the hiring|^recently hired$|^show more$|^message$/i.test(value)) return false;
+  if (/\d+\s+(?:minute|hour|day|week|month|year)s?\s+ago/i.test(value)) return false;
+  if (/[•·|]/.test(value)) return false;
+  if (locationFromBlob(value) === value) return false;
+  return true;
+}
+
+function sduiPills(root: ParentNode, jobId: string): { workplace: string; employmentType: string } {
+  const labels = [
+    ...root.querySelectorAll(
+      jobId ? `a[href*="/jobs/view/${jobId}"], span` : 'a[href*="/jobs/view/"], span',
+    ),
+  ]
+    .map((el) => cleanText(el.textContent))
+    .filter(Boolean);
+  let workplace = '';
+  let employmentType = '';
+  for (const label of labels) {
+    if (!workplace && /^(Remote|Hybrid|On-?site|On site)$/i.test(label)) {
+      workplace = /hybrid/i.test(label) ? 'Hybrid' : /on[-\s]?site/i.test(label) ? 'On-site' : 'Remote';
+    }
+    if (!employmentType && /^(Full-?time|Part-?time|Contract|Internship)$/i.test(label)) {
+      employmentType = /full/i.test(label)
+        ? 'Full-time'
+        : /part/i.test(label)
+          ? 'Part-time'
+          : /intern/i.test(label)
+            ? 'Internship'
+            : 'Contract';
+    }
+  }
+  return { workplace, employmentType };
+}
+
+function jobPosterName(root: ParentNode): string {
+  const lines = [...root.querySelectorAll('p')].map((el) => cleanText(el.textContent)).filter(Boolean);
+  const idx = lines.findIndex((line) => /^job poster$/i.test(line));
+  if (idx < 0) return '';
+  for (let i = idx - 1; i >= Math.max(0, idx - 6); i -= 1) {
+    const line = lines[i] ?? '';
+    if (/^•?\s*\d+(st|nd|rd|th)$/i.test(line) || /meet the hiring|message|recently hired/i.test(line)) {
+      continue;
+    }
+    if (/^[A-Z][a-zA-Z.'-]+(?:\s+[A-Z][a-zA-Z.'-]+){0,4}$/.test(line)) return line;
+  }
+  return '';
 }
 
 function sduiCompanyLink(root: ParentNode): HTMLAnchorElement | null {
-  return (
-    root.querySelector<HTMLAnchorElement>('a[aria-label^="Company"]') ||
-    root.querySelector<HTMLAnchorElement>('a[href*="/company/"]:not([href*="insights"])')
+  const labeled = root.querySelectorAll<HTMLAnchorElement>('a[aria-label^="Company"]');
+  for (const link of labeled) {
+    if (sduiCompanyName(link)) return link;
+  }
+  const links = root.querySelectorAll<HTMLAnchorElement>(
+    'a[href*="/company/"]:not([href*="insights"]), a[href*="/school/"]:not([href*="insights"])',
   );
+  for (const link of links) {
+    const name = sduiCompanyName(link);
+    if (name && !/^show more/i.test(name)) return link;
+  }
+  return null;
 }
 
 function sduiCompanyName(link: HTMLAnchorElement | null): string {
