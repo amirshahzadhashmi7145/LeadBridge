@@ -58,17 +58,17 @@ export async function saveLead(
   const keys = identityKeys(identityFromLead(prepared));
 
   try {
-    const { result, duplicate } = await saveLeadOnSheet(
+    if (action === 'create') {
+      rejectIfDuplicate(await checkLeadOnSheet(prepared, user));
+    }
+
+    const { result } = await saveLeadOnSheet(
       prepared,
       user,
       config,
       action,
       existingRow,
     );
-
-    if (duplicate && action === 'create') {
-      throw duplicate.sameUser ? new SameUserDuplicateError(duplicate) : new DuplicateError(duplicate);
-    }
 
     await logger.info('sheets', action === 'update' ? 'Updated lead' : 'Created lead', {
       rowNumber: result.rowNumber,
@@ -84,6 +84,11 @@ export async function saveLead(
     if (isNetworkError(error)) throw new OfflineQueuedError();
     throw error;
   }
+}
+
+function rejectIfDuplicate(match: DuplicateMatch | null) {
+  if (!match) return;
+  throw match.sameUser ? new SameUserDuplicateError(match) : new DuplicateError(match);
 }
 
 function applyAudit(lead: Lead, user: GoogleUser, now: string, isCreate: boolean): Lead {

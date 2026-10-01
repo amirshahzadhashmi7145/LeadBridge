@@ -13,6 +13,7 @@ import type { DuplicateMatch } from './types';
 export interface WebhookSaveResult {
   action: 'created' | 'updated';
   rowNumber: number;
+  unconfirmed?: boolean;
 }
 
 interface WebhookBody {
@@ -49,11 +50,14 @@ export async function checkLeadOnSheet(
   lead: Lead,
   user: GoogleUser,
 ): Promise<DuplicateMatch | null> {
-  const data = await requestWebhook('POST', {
-    action: 'check',
-    currentUser: { name: user.name, email: user.email },
-    identity: resolveIdentity(lead),
-  });
+  const data = await requestWebhook(
+    {
+      action: 'check',
+      currentUser: { name: user.name, email: user.email },
+      identity: resolveIdentity(lead),
+    },
+    'read',
+  );
   return duplicateFromResponse(data, user.email);
 }
 
@@ -83,24 +87,34 @@ export async function saveLeadOnSheet(
       values.push(clampSheetValue(header, value));
     }
   });
-  const data = await requestWebhook('POST', {
-    identity,
-    action: 'save',
-    saveAction,
-    existingRow,
-    currentUser: { name: user.name, email: user.email },
-    headers,
-    values,
-  });
+  const data = await requestWebhook(
+    {
+      identity,
+      action: 'save',
+      saveAction,
+      existingRow,
+      currentUser: { name: user.name, email: user.email },
+      headers,
+      values,
+    },
+    'write',
+  );
 
-  if (data.status === 'duplicate' || data.status === 'error') {
+  if (data.status === 'duplicate') {
+    return {
+      result: { action: 'created', rowNumber: 0 },
+      duplicate: duplicateFromResponse(data, user.email) ?? fallbackDuplicate(user, stamped),
+    };
+  }
+
+  if (data.status === 'error') {
     const duplicate = duplicateFromResponse(data, user.email);
     if (duplicate) return { result: { action: 'created', rowNumber: 0 }, duplicate };
     throw new Error(data.message || 'The team sheet rejected this lead.');
   }
 
   if (data.status === 'unconfirmed') {
-    return { result: { action: 'created', rowNumber: 0 }, duplicate: null };
+    return { result: { action: 'created', rowNumber: 0, unconfirmed: true }, duplicate: null };
   }
 
   const saved = data.action === 'updated' || data.action === 'created' || Number(data.rowNumber) > 0;
@@ -135,23 +149,23 @@ const SHEET_AUTH_ERROR =
 const WEB_APP_ACCESS_ERROR =
   'The team Google script is not public. a.fdev786@gmail.com must open Deploy → Manage deployments → Edit, set Who has access to Anyone, Execute as Me, then Deploy. Keep the same /exec URL.';
 
-async function requestWebhook(method: 'GET' | 'POST', payload?: unknown): Promise<WebhookBody> {
-  void method;
-  if (payload == null) {
-    return fetchJson(COMPANY_GOOGLE_WEB_APP_URL);
-  }
+async function requestWebhook(
+  payload: unknown,
+  mode: 'read' | 'write',
+): Promise<WebhookBody> {
   const current = payload;
   for (let round = 0; round < 8; round += 1) {
     const encoded = encodeURIComponent(JSON.stringify(current));
     if (encoded.length <= INLINE_LIMIT) {
-      return fetchJson(`${COMPANY_GOOGLE_WEB_APP_URL}?action=run&payload=${encoded}`);
+      const url = `${COMPANY_GOOGLE_WEB_APP_URL}?action=run&payload=${encoded}`;
+      return mode === 'read' ? fetchJsonRead(url) : fetchJsonWrite(url);
     }
     if (!shrinkWebhookPayload(current)) break;
   }
   throw new Error('This lead is too large to send to the team Google script in one request.');
 }
 
-async function fetchJson(url: string): Promise<WebhookBody> {
+async function fetchJsonWrite(url: string): Promise<WebhookBody> {
   const { status, text, requestUrl } = await fetchAppsScript(url);
   if (status < 200 || status >= 300) {
     await logger.error('sheets', 'GET webhook failed', {
@@ -171,8 +185,65 @@ async function fetchJson(url: string): Promise<WebhookBody> {
   return data;
 }
 
+/** Check/read only. Safe to retry /exec because it does not append a row. */
+async function fetchJsonRead(url: string): Promise<WebhookBody> {
+  let lastError: Error | null = null;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    try {
+      const response = await fetch(url, {
+        method: 'GET',
+        redirect: 'follow',
+        cache: 'no-store',
+        credentials: 'omit',
+      });
+      if (response.type === 'opaqueredirect' || response.status === 0) {
+        lastError = new Error('Could not read the team sheet.');
+        await delay(250 * (attempt + 1));
+        continue;
+      }
+      const text = await response.text();
+      if (!response.ok) {
+        if (response.status === 404 || response.status === 429) {
+          await delay(250 * (attempt + 1));
+          continue;
+        }
+        throw webhookError(response.status, text, url);
+      }
+      if (!text.trim()) {
+        await delay(250 * (attempt + 1));
+        continue;
+      }
+      const data = parseBody(text, url);
+      if (data.status === 'unconfirmed') {
+        await delay(250 * (attempt + 1));
+        continue;
+      }
+      if (data.status === 'error') {
+        throw new Error(scriptErrorMessage(data.message));
+      }
+      return data;
+    } catch (error) {
+      if (error instanceof Error && /cannot open the spreadsheet|not public|URL was not found/i.test(error.message)) {
+        throw error;
+      }
+      lastError = error instanceof Error ? error : new Error(String(error));
+      await delay(250 * (attempt + 1));
+    }
+  }
+  throw lastError || new Error('Could not read the team sheet.');
+}
+
 function isPayloadRequest(url: string): boolean {
   return /[?&]payload=/.test(url);
+}
+
+function isAppsScriptExec(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return /script\.google\.com$/i.test(parsed.hostname) && /\/exec$/i.test(parsed.pathname);
+  } catch {
+    return false;
+  }
 }
 
 async function fetchAppsScript(
@@ -191,7 +262,11 @@ async function fetchAppsScript(
 
   const location = first.headers.get('Location');
   if (location && first.status >= 300 && first.status < 400) {
-    return fetchEcho(new URL(location, url).toString(), url);
+    const next = new URL(location, url).toString();
+    if (isAppsScriptExec(next)) {
+      return unconfirmedResponse(url);
+    }
+    return fetchEcho(next, url);
   }
 
   if (isPayloadRequest(url) && (first.type === 'opaqueredirect' || first.status === 0 || (first.status >= 300 && first.status < 400))) {
@@ -205,6 +280,9 @@ async function fetchEcho(
   echoUrl: string,
   originUrl: string,
 ): Promise<{ status: number; text: string; requestUrl: string }> {
+  if (isAppsScriptExec(echoUrl)) {
+    return unconfirmedResponse(originUrl);
+  }
   let lastStatus = 0;
   let lastText = '';
   for (let attempt = 0; attempt < 4; attempt += 1) {
@@ -259,21 +337,32 @@ function scriptErrorMessage(message?: string): string {
 
 function duplicateFromResponse(data: WebhookBody, email: string): DuplicateMatch | null {
   const match = data.duplicate;
-  if (!match || !match.rowNumber) return null;
-  const capturedBy = match.capturedBy || match.lead?.capturedBy || match.lead?.salesOwner || 'another teammate';
-  const capturedAt = match.capturedAt || match.lead?.capturedAt || '';
-  const source = match.source || match.lead?.source || match.lead?.sourceUrl || '';
+  if (data.status !== 'duplicate' && (!match || !match.rowNumber)) return null;
+  const capturedBy = match?.capturedBy || match?.lead?.capturedBy || match?.lead?.salesOwner || 'another teammate';
+  const capturedAt = match?.capturedAt || match?.lead?.capturedAt || '';
+  const source = match?.source || match?.lead?.source || match?.lead?.sourceUrl || '';
   const sameUser =
-    typeof match.sameUser === 'boolean'
+    typeof match?.sameUser === 'boolean'
       ? match.sameUser
-      : emailsEqual(capturedBy, email) || emailsEqual(match.lead?.salesOwner, email);
+      : emailsEqual(capturedBy, email) || emailsEqual(match?.lead?.salesOwner, email);
   return {
-    rowNumber: match.rowNumber,
-    lead: match.lead ?? {},
+    rowNumber: Number(match?.rowNumber) || 0,
+    lead: match?.lead ?? {},
     capturedBy,
     capturedAt,
     source,
     sameUser,
+  };
+}
+
+function fallbackDuplicate(user: GoogleUser, lead: Lead): DuplicateMatch {
+  return {
+    rowNumber: 0,
+    lead,
+    capturedBy: user.name || user.email || 'another teammate',
+    capturedAt: lead.capturedAt || '',
+    source: lead.source || lead.sourceUrl || '',
+    sameUser: true,
   };
 }
 

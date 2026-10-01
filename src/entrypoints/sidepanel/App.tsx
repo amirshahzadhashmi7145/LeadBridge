@@ -72,6 +72,11 @@ export default function App() {
   useEffect(() => {
     const onResult = (message: ExtensionMessage) => {
       if (message.type !== 'SAVE_RESULT') return;
+      if (message.duplicate) {
+        setDuplicate(message.duplicate);
+        setBanner({ tone: 'info', text: 'This lead already exists.' });
+        return;
+      }
       if (message.ok) {
         setDuplicate(null);
         setBanner({
@@ -81,11 +86,6 @@ export default function App() {
             : 'Saved to Google Sheets.',
         });
         void sendMessage({ type: 'CLEAR_HIGHLIGHTS' });
-        return;
-      }
-      if (message.duplicate) {
-        setDuplicate(message.duplicate);
-        setBanner({ tone: 'info', text: 'This lead already exists.' });
         return;
       }
       if (message.queuedOffline) {

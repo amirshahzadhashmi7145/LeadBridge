@@ -368,7 +368,12 @@ async function finishSaveJob(
   let detail = result.error || 'Could not save this lead.';
   let toastTitle = 'Save failed';
   let tone: 'saving' | 'success' | 'error' | 'queued' = 'error';
-  if (result.ok && result.save) {
+  if (result.duplicate) {
+    status = 'duplicate';
+    toastTitle = 'Already in the sheet';
+    detail = result.error || 'This lead already exists.';
+    tone = 'error';
+  } else if (result.ok && result.save) {
     status = 'success';
     tone = 'success';
     toastTitle = result.save.action === 'updated' ? 'Lead updated' : 'Lead saved';
@@ -379,11 +384,6 @@ async function finishSaveJob(
       : result.save.rowNumber
         ? `Saved as row ${result.save.rowNumber}`
         : 'Saved to Google Sheets';
-  } else if (result.duplicate) {
-    status = 'duplicate';
-    toastTitle = 'Already in the sheet';
-    detail = result.error || 'This lead already exists.';
-    tone = 'error';
   } else if (result.queuedOffline) {
     status = 'queued';
     tone = 'queued';
